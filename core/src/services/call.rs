@@ -22,12 +22,14 @@ pub struct ActiveCall {
 
 pub struct CallService {
     active_call: Arc<Mutex<Option<ActiveCall>>>,
+    loaded_modules: Arc<Mutex<Vec<String>>>,
 }
 
 impl CallService {
     pub fn new() -> Self {
         Self {
             active_call: Arc::new(Mutex::new(None)),
+            loaded_modules: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -120,35 +122,106 @@ impl CallService {
 
     async fn setup_audio_routing(&self) -> anyhow::Result<()> {
         info!("Setting up desktop audio routing loops for call...");
-        // In a real setup, we might load loopback modules in PulseAudio:
-        // pactl load-module module-loopback latency_msec=60
-        // We run a dry run or log it
-        let output = Command::new("pactl")
-            .args(["load-module", "module-loopback", "latency_msec=60"])
-            .output()
-            .await;
+        
+        let loaded_modules = self.loaded_modules.clone();
+        
+        // Spawn background task to wait for SCO channels (Bluetooth source/sink) to be created by Pipewire
+        tokio::spawn(async move {
+            let mut attempts = 0;
+            let max_attempts = 15; // 7.5 seconds
             
-        match output {
-            Ok(out) if out.status.success() => {
-                let module_id = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                info!("Loaded PulseAudio loopback module: {}", module_id);
+            while attempts < max_attempts {
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                attempts += 1;
+                
+                let sources = match get_pactl_list("sources").await {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
+                let sinks = match get_pactl_list("sinks").await {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
+                
+                let bluez_source = sources.iter().find(|s| s.contains("bluez_input"));
+                let bluez_sink = sinks.iter().find(|s| s.contains("bluez_output"));
+                
+                if let (Some(b_source), Some(b_sink)) = (bluez_source, bluez_sink) {
+                    info!("Bluetooth call audio nodes discovered. Source: {}, Sink: {}", b_source, b_sink);
+                    
+                    // Loop 1: Phone MIC (bluez source) -> PC Speakers (default sink)
+                    let mod1 = Command::new("pactl")
+                        .args(&["load-module", "module-loopback", &format!("source={}", b_source), "sink=@DEFAULT_SINK@", "latency_msec=60"])
+                        .output()
+                        .await;
+                        
+                    // Loop 2: PC MIC (default source) -> Phone Speaker (bluez sink)
+                    let mod2 = Command::new("pactl")
+                        .args(&["load-module", "module-loopback", "source=@DEFAULT_SOURCE@", &format!("sink={}", b_sink), "latency_msec=60"])
+                        .output()
+                        .await;
+                        
+                    let mut modules = loaded_modules.lock().await;
+                    if let Ok(m1_out) = mod1 {
+                        if m1_out.status.success() {
+                            let id = String::from_utf8_lossy(&m1_out.stdout).trim().to_string();
+                            info!("Loaded Loopback Module 1 (Phone -> Speakers): {}", id);
+                            modules.push(id);
+                        }
+                    }
+                    if let Ok(m2_out) = mod2 {
+                        if m2_out.status.success() {
+                            let id = String::from_utf8_lossy(&m2_out.stdout).trim().to_string();
+                            info!("Loaded Loopback Module 2 (Mic -> Phone): {}", id);
+                            modules.push(id);
+                        }
+                    }
+                    break;
+                }
+                info!("Waiting for Bluetooth call audio nodes (attempt {}/{})...", attempts, max_attempts);
             }
-            _ => {
-                info!("PulseAudio load-module not supported or failed. Skipping loopback routing.");
-            }
-        }
+        });
+        
         Ok(())
     }
 
     async fn cleanup_audio_routing(&self) -> anyhow::Result<()> {
         info!("Cleaning up desktop audio routing loops...");
-        // Unload loopback modules if they were loaded
-        // For safety, we can unload all module-loopback instances:
-        // pactl unload-module module-loopback
+        
+        let mut modules = self.loaded_modules.lock().await;
+        for mod_id in modules.drain(..) {
+            info!("Unloading loopback module ID: {}", mod_id);
+            let _ = Command::new("pactl")
+                .args(&["unload-module", &mod_id])
+                .output()
+                .await;
+        }
+        
+        // Safety fallback: unload any remaining loopback modules
         let _ = Command::new("pactl")
-            .args(["unload-module", "module-loopback"])
+            .args(&["unload-module", "module-loopback"])
             .output()
             .await;
+            
         Ok(())
     }
+}
+
+async fn get_pactl_list(type_str: &str) -> anyhow::Result<Vec<String>> {
+    let output = Command::new("pactl")
+        .args(&["list", type_str, "short"])
+        .output()
+        .await?;
+        
+    let mut names = Vec::new();
+    if output.status.success() {
+        let text = String::from_utf8_lossy(&output.stdout);
+        for line in text.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 {
+                names.push(parts[1].to_string());
+            }
+        }
+    }
+    Ok(names)
 }
