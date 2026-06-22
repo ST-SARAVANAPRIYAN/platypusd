@@ -26,10 +26,38 @@ class CallReceiver : BroadcastReceiver() {
         // Generate a stable call ID for this session (simulating Telecom APIs)
         val callId = "call-${incomingNumber.hashCode()}"
 
-        // Query contact name logic could go here; for now, we pass the phone number as name or stub it.
-        val contactName = if (incomingNumber.startsWith("+")) "Incoming: $incomingNumber" else "Unknown Caller"
+        val contactName = getContactName(context, incomingNumber)
 
         // Forward to running service to perform HTTP upload
         ConnectionService.updateCallState(callId, incomingNumber, contactName, state)
+    }
+
+    private fun getContactName(context: Context, phoneNumber: String): String {
+        if (phoneNumber == "Private Number" || phoneNumber.isEmpty()) return "Unknown Caller"
+        
+        if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.READ_CONTACTS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            return "Incoming: $phoneNumber"
+        }
+        
+        try {
+            val uri = android.net.Uri.withAppendedPath(
+                android.provider.ContactsContract.PhoneLookup.CONTENT_FILTER_URI, 
+                android.net.Uri.encode(phoneNumber)
+            )
+            val projection = arrayOf(android.provider.ContactsContract.PhoneLookup.DISPLAY_NAME)
+            
+            context.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val nameIndex = cursor.getColumnIndex(android.provider.ContactsContract.PhoneLookup.DISPLAY_NAME)
+                    if (nameIndex != -1) {
+                        return cursor.getString(nameIndex)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("CallReceiver", "Error querying contacts: ${e.message}")
+        }
+        
+        return "Incoming: $phoneNumber"
     }
 }

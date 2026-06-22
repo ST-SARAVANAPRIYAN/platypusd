@@ -424,6 +424,7 @@ class MainActivity : AppCompatActivity() {
         val phoneState = ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE)
         val callLog = ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CALL_LOG)
         val answerCalls = ContextCompat.checkSelfPermission(this, Manifest.permission.ANSWER_PHONE_CALLS)
+        val readContacts = ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS)
         
         val bluetoothConnect = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
@@ -434,6 +435,7 @@ class MainActivity : AppCompatActivity() {
         return phoneState == PackageManager.PERMISSION_GRANTED && 
                callLog == PackageManager.PERMISSION_GRANTED && 
                answerCalls == PackageManager.PERMISSION_GRANTED && 
+               readContacts == PackageManager.PERMISSION_GRANTED && 
                bluetoothConnect
     }
 
@@ -441,7 +443,8 @@ class MainActivity : AppCompatActivity() {
         val permissions = mutableListOf(
             Manifest.permission.READ_PHONE_STATE, 
             Manifest.permission.READ_CALL_LOG,
-            Manifest.permission.ANSWER_PHONE_CALLS
+            Manifest.permission.ANSWER_PHONE_CALLS,
+            Manifest.permission.READ_CONTACTS
         )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
