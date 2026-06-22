@@ -45,6 +45,11 @@ impl CallService {
             }
             old
         } else {
+            if call.state == CallState::Ringing {
+                if let Err(e) = self.setup_audio_routing().await {
+                    warn!("Failed to set up pre-emptive audio routing: {}", e);
+                }
+            }
             *active = Some(call.clone());
             Some(call)
         }
@@ -121,6 +126,15 @@ impl CallService {
     }
 
     async fn setup_audio_routing(&self) -> anyhow::Result<()> {
+        // Prevent duplicate loopbacks
+        {
+            let modules = self.loaded_modules.lock().await;
+            if !modules.is_empty() {
+                info!("Audio routing loops already established. Skipping setup.");
+                return Ok(());
+            }
+        }
+
         info!("Setting up desktop audio routing loops for call...");
         
         let loaded_modules = self.loaded_modules.clone();
@@ -128,7 +142,7 @@ impl CallService {
         // Spawn background task to wait for SCO channels (Bluetooth source/sink) to be created by Pipewire
         tokio::spawn(async move {
             let mut attempts = 0;
-            let max_attempts = 15; // 7.5 seconds
+            let max_attempts = 20; // 10 seconds
             
             while attempts < max_attempts {
                 tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
@@ -149,6 +163,18 @@ impl CallService {
                 if let (Some(b_source), Some(b_sink)) = (bluez_source, bluez_sink) {
                     info!("Bluetooth call audio nodes discovered. Source: {}, Sink: {}", b_source, b_sink);
                     
+                    // Unmute and set Bluetooth Source volume to 100%
+                    let _ = Command::new("pactl").args(&["set-source-mute", b_source, "0"]).output().await;
+                    let _ = Command::new("pactl").args(&["set-source-volume", b_source, "100%"]).output().await;
+
+                    // Unmute and set Bluetooth Sink volume to 100%
+                    let _ = Command::new("pactl").args(&["set-sink-mute", b_sink, "0"]).output().await;
+                    let _ = Command::new("pactl").args(&["set-sink-volume", b_sink, "100%"]).output().await;
+
+                    // Ensure system default source/sink are unmuted
+                    let _ = Command::new("pactl").args(&["set-source-mute", "@DEFAULT_SOURCE@", "0"]).output().await;
+                    let _ = Command::new("pactl").args(&["set-sink-mute", "@DEFAULT_SINK@", "0"]).output().await;
+
                     // Loop 1: Phone MIC (bluez source) -> PC Speakers (default sink)
                     let mod1 = Command::new("pactl")
                         .args(&["load-module", "module-loopback", &format!("source={}", b_source), "sink=@DEFAULT_SINK@", "latency_msec=60"])
