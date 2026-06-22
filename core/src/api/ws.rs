@@ -85,6 +85,29 @@ async fn handle_socket(socket: WebSocket, device_id: Option<String>, state: AppS
                                     }
                                 }
                             }
+                        } else if cmd == "UpdateBluetoothStatus" {
+                            if let Some(data) = ws_cmd.get("data") {
+                                if let (Some(is_connected), Some(dev_id)) = (
+                                    data.get("is_connected").and_then(|c| c.as_bool()),
+                                    data.get("device_id").and_then(|d| d.as_str()),
+                                ) {
+                                    info!("Bluetooth connection status update received from {}: connected={}", dev_id, is_connected);
+                                    let mut active_bt = state_clone.active_bluetooth.lock().await;
+                                    if is_connected {
+                                        active_bt.insert(dev_id.to_string());
+                                    } else {
+                                        active_bt.remove(dev_id);
+                                    }
+                                    // Broadcast Bluetooth state change so the desktop UI updates instantly
+                                    let _ = state_clone.tx.send(WsMessage {
+                                        event: "BluetoothStateChanged".to_string(),
+                                        data: serde_json::json!({
+                                            "device_id": dev_id.to_string(),
+                                            "is_connected": is_connected
+                                        }),
+                                    });
+                                }
+                            }
                         }
                     }
                 }
@@ -100,8 +123,14 @@ async fn handle_socket(socket: WebSocket, device_id: Option<String>, state: AppS
 
     if is_mobile && !dev_id.is_empty() {
         info!("Mobile device disconnected via WS: {}", dev_id);
-        let mut active = state.active_connections.lock().await;
-        active.remove(&dev_id);
+        {
+            let mut active = state.active_connections.lock().await;
+            active.remove(&dev_id);
+        }
+        {
+            let mut active_bt = state.active_bluetooth.lock().await;
+            active_bt.remove(&dev_id);
+        }
         // Broadcast disconnection update
         let _ = state.tx.send(WsMessage {
             event: "DeviceDisconnected".to_string(),

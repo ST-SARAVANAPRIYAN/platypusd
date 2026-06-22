@@ -60,10 +60,55 @@ async fn main() -> anyhow::Result<()> {
         identity,
         tx,
         active_connections: Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new())),
+        active_bluetooth: Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new())),
     };
 
+    // Periodically poll connected Bluetooth devices and update active_bluetooth state
+    let db_clone = app_state.db.clone();
+    let active_bt_clone = app_state.active_bluetooth.clone();
+    let tx_clone = app_state.tx.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+            
+            let connected_bt = services::bluetooth::check_bluetooth_connected_devices();
+            let paired = db_clone.get_paired_devices().await.unwrap_or_default();
+            
+            let mut active_bt = active_bt_clone.lock().await;
+            for (id, name) in paired {
+                let is_connected_now = connected_bt.iter().any(|(_, bt_name)| {
+                    bt_name.to_lowercase().contains(&name.to_lowercase()) || name.to_lowercase().contains(&bt_name.to_lowercase())
+                });
+                
+                let is_connected_currently = active_bt.contains(&id);
+                if is_connected_now && !is_connected_currently {
+                    info!("Bluetooth connection detected dynamically for device: {} ({})", name, id);
+                    active_bt.insert(id.clone());
+                    let _ = tx_clone.send(api::WsMessage {
+                        event: "BluetoothStateChanged".to_string(),
+                        data: serde_json::json!({
+                            "device_id": id,
+                            "is_connected": true
+                        }),
+                    });
+                } else if !is_connected_now && is_connected_currently {
+                    info!("Bluetooth disconnection detected dynamically for device: {} ({})", name, id);
+                    active_bt.remove(&id);
+                    let _ = tx_clone.send(api::WsMessage {
+                        event: "BluetoothStateChanged".to_string(),
+                        data: serde_json::json!({
+                            "device_id": id,
+                            "is_connected": false
+                        }),
+                    });
+                }
+            }
+        }
+    });
+
     // Instantiate Axum Router
-    let app = api::create_router(app_state);
+    let app = api::create_router(app_state.clone());
+
 
     // Run Axum HTTP/WebSocket server
     let bind_addr = format!("0.0.0.0:{}", port);

@@ -24,15 +24,18 @@ pub struct PairedDeviceDto {
     pub device_id: String,
     pub device_name: String,
     pub is_online: bool,
+    pub is_bluetooth_connected: bool,
 }
 
 pub async fn get_status(State(state): State<AppState>) -> Json<StatusResponse> {
     let paired = state.db.get_paired_devices().await.unwrap_or_default();
     let active = state.active_connections.lock().await;
+    let active_bt = state.active_bluetooth.lock().await;
     let paired_dtos = paired.into_iter()
         .map(|(id, name)| {
             let is_online = active.contains(&id);
-            PairedDeviceDto { device_id: id, device_name: name, is_online }
+            let is_bluetooth_connected = active_bt.contains(&id);
+            PairedDeviceDto { device_id: id, device_name: name, is_online, is_bluetooth_connected }
         })
         .collect();
 
@@ -283,3 +286,76 @@ pub async fn set_clipboard_config(
     info!("Updated clipboard configuration: direction={}, auto_sync={}", cfg.direction, cfg.auto_sync);
     (StatusCode::OK, Json(serde_json::json!({ "success": true })))
 }
+
+#[derive(Deserialize)]
+pub struct BluetoothDisconnectRequest {
+    pub device_id: String,
+}
+
+pub async fn open_bluetooth_settings_route() -> (StatusCode, Json<serde_json::Value>) {
+    if crate::services::bluetooth::open_bluetooth_settings() {
+        (StatusCode::OK, Json(serde_json::json!({ "success": true })))
+    } else {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+            "success": false,
+            "error": "Failed to launch Bluetooth settings GUI. Please open it manually."
+        })))
+    }
+}
+
+pub async fn disconnect_bluetooth_device_route(
+    State(state): State<AppState>,
+    Json(payload): Json<BluetoothDisconnectRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    info!("Request to disconnect Bluetooth device_id: {}", payload.device_id);
+    
+    // Find device name by ID
+    let paired = state.db.get_paired_devices().await.unwrap_or_default();
+    let dev_name = paired.into_iter()
+        .find(|(id, _)| id == &payload.device_id)
+        .map(|(_, name)| name);
+        
+    if let Some(name) = dev_name {
+        // Query bluetoothctl devices Connected to find MAC
+        let connected_bt = crate::services::bluetooth::check_bluetooth_connected_devices();
+        let target_mac = connected_bt.into_iter()
+            .find(|(_, bt_name)| bt_name.to_lowercase().contains(&name.to_lowercase()) || name.to_lowercase().contains(&bt_name.to_lowercase()))
+            .map(|(mac, _)| mac);
+            
+        if let Some(mac) = target_mac {
+            info!("Found matching Bluetooth MAC address: {} for device name: {}", mac, name);
+            if crate::services::bluetooth::disconnect_bluetooth_device(&mac) {
+                // Update active_bluetooth state
+                let mut active_bt = state.active_bluetooth.lock().await;
+                active_bt.remove(&payload.device_id);
+                
+                // Broadcast event
+                let _ = state.tx.send(WsMessage {
+                    event: "BluetoothStateChanged".to_string(),
+                    data: serde_json::json!({
+                        "device_id": payload.device_id.clone(),
+                        "is_connected": false
+                    }),
+                });
+                
+                (StatusCode::OK, Json(serde_json::json!({ "success": true })))
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+                    "success": false,
+                    "error": "Failed to run disconnect command."
+                })))
+            }
+        } else {
+            (StatusCode::NOT_FOUND, Json(serde_json::json!({
+                "success": false,
+                "error": format!("No active Bluetooth connection found matching device: {}", name)
+            })))
+        }
+    } else {
+        (StatusCode::NOT_FOUND, Json(serde_json::json!({
+            "success": false,
+            "error": "Device not paired"
+        })))
+    }
+}
+

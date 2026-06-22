@@ -43,6 +43,35 @@ class ConnectionService : Service() {
     private var activeWebSocket: WebSocket? = null
     private var isWsConnected = false
 
+    private val connectedBluetoothDevices = HashSet<String>()
+    
+    private val bluetoothReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            val action = intent.action
+            if (android.bluetooth.BluetoothDevice.ACTION_ACL_CONNECTED == action) {
+                val device = intent.getParcelableExtra<android.bluetooth.BluetoothDevice>(android.bluetooth.BluetoothDevice.EXTRA_DEVICE)
+                device?.let {
+                    connectedBluetoothDevices.add(it.address)
+                    Log.d(TAG, "Bluetooth ACL Connected: ${it.name} (${it.address})")
+                    checkBluetoothConnectionToHost()
+                }
+            } else if (android.bluetooth.BluetoothDevice.ACTION_ACL_DISCONNECTED == action) {
+                val device = intent.getParcelableExtra<android.bluetooth.BluetoothDevice>(android.bluetooth.BluetoothDevice.EXTRA_DEVICE)
+                device?.let {
+                    connectedBluetoothDevices.remove(it.address)
+                    Log.d(TAG, "Bluetooth ACL Disconnected: ${it.name} (${it.address})")
+                    checkBluetoothConnectionToHost()
+                }
+            } else if (android.bluetooth.BluetoothAdapter.ACTION_STATE_CHANGED == action) {
+                val state = intent.getIntExtra(android.bluetooth.BluetoothAdapter.EXTRA_STATE, android.bluetooth.BluetoothAdapter.ERROR)
+                if (state == android.bluetooth.BluetoothAdapter.STATE_OFF) {
+                    connectedBluetoothDevices.clear()
+                    checkBluetoothConnectionToHost()
+                }
+            }
+        }
+    }
+
     private lateinit var clipboardManager: ClipboardManager
     private var lastSyncedClipboardText = ""
 
@@ -107,6 +136,14 @@ class ConnectionService : Service() {
         startMdnsDiscovery()
         connectWebSocket()
 
+        // Register dynamic bluetooth connection tracking
+        val filter = android.content.IntentFilter().apply {
+            addAction(android.bluetooth.BluetoothDevice.ACTION_ACL_CONNECTED)
+            addAction(android.bluetooth.BluetoothDevice.ACTION_ACL_DISCONNECTED)
+            addAction(android.bluetooth.BluetoothAdapter.ACTION_STATE_CHANGED)
+        }
+        registerReceiver(bluetoothReceiver, filter)
+
         Log.i(TAG, "ConnectionService initialized.")
     }
 
@@ -115,12 +152,22 @@ class ConnectionService : Service() {
         if (customIp != null) {
             updateDaemonUrl(customIp, 8080)
         }
+        val checkBt = intent?.getBooleanExtra("CHECK_BT", false) ?: false
+        if (checkBt) {
+            isBluetoothConnectedCached = null // force update
+            checkBluetoothConnectionToHost()
+        }
         return START_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        try {
+            unregisterReceiver(bluetoothReceiver)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error unregistering bluetooth receiver: ${e.message}")
+        }
         super.onDestroy()
         stopMdnsDiscovery()
         activeWebSocket?.close(1000, "Service destroyed")
@@ -256,9 +303,16 @@ class ConnectionService : Service() {
         Log.i(TAG, "Connecting WebSocket to: $urlWithParams")
         val request = Request.Builder().url(urlWithParams).build()
         activeWebSocket = client.newWebSocket(request, object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) {
+             override fun onOpen(webSocket: WebSocket, response: Response) {
                 isWsConnected = true
                 Log.i(TAG, "WebSocket event connection opened to: $wsUrl")
+                isBluetoothConnectedCached = null // force update
+                scope.launch {
+                    while (isWsConnected) {
+                        checkBluetoothConnectionToHost()
+                        kotlinx.coroutines.delay(3000)
+                    }
+                }
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -364,6 +418,83 @@ class ConnectionService : Service() {
             Log.e(TAG, "SecurityException programmatically handling call action: ${e.message}")
         } catch (e: Exception) {
             Log.e(TAG, "Error handling call action command: ${e.message}")
+        }
+    }
+
+    private var isBluetoothConnectedCached: Boolean? = null
+
+    private fun checkBluetoothConnectionToHost() {
+        if (!isWsConnected || activeWebSocket == null) return
+
+        val btAdapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter()
+        var currentStatus = false
+
+        if (btAdapter != null && btAdapter.isEnabled) {
+            try {
+                if (androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.BLUETOOTH_CONNECT) == android.content.pm.PackageManager.PERMISSION_GRANTED || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+                    val sharedPrefs = getSharedPreferences("platypusd_prefs", Context.MODE_PRIVATE)
+                    val selectedMac = sharedPrefs.getString("selected_bluetooth_mac", null)
+
+                    if (selectedMac != null) {
+                        if (connectedBluetoothDevices.contains(selectedMac)) {
+                            currentStatus = true
+                        } else {
+                            try {
+                                val device = btAdapter.getRemoteDevice(selectedMac)
+                                val method = device.javaClass.getMethod("isConnected")
+                                currentStatus = method.invoke(device) as Boolean
+                            } catch (e: Exception) {
+                                currentStatus = false
+                            }
+                        }
+                    } else {
+                        val bonded = btAdapter.bondedDevices
+                        for (device in bonded) {
+                            val isConnected = try {
+                                val method = device.javaClass.getMethod("isConnected")
+                                method.invoke(device) as Boolean
+                            } catch (e: Exception) {
+                                false
+                            }
+                            if (isConnected) {
+                                val devName = (device.name ?: "").lowercase()
+                                if (devName.contains("edith") || devName.contains("linux") || devName.contains("pc") || devName.contains("desktop") || devName.contains("computer")) {
+                                    currentStatus = true
+                                    break
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (e: SecurityException) {
+                Log.e(TAG, "No bluetooth permission to check connection status: ${e.message}")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error checking bluetooth status: ${e.message}")
+            }
+        }
+
+        if (isBluetoothConnectedCached != currentStatus) {
+            isBluetoothConnectedCached = currentStatus
+            Log.i(TAG, "Bluetooth connection status to host changed: $currentStatus. Sending to backend.")
+            sendBluetoothStatus(currentStatus)
+        }
+    }
+
+    private fun sendBluetoothStatus(isConnected: Boolean) {
+        if (activeWebSocket == null || !isWsConnected) return
+        scope.launch {
+            try {
+                val json = org.json.JSONObject().apply {
+                    put("command", "UpdateBluetoothStatus")
+                    put("data", org.json.JSONObject().apply {
+                        put("device_id", deviceId)
+                        put("is_connected", isConnected)
+                    })
+                }
+                activeWebSocket?.send(json.toString())
+            } catch (e: Exception) {
+                Log.e(TAG, "Error sending bluetooth status: ${e.message}")
+            }
         }
     }
 
