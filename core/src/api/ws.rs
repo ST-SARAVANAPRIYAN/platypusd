@@ -1,0 +1,113 @@
+use axum::{
+    extract::{ws::{Message, WebSocket, WebSocketUpgrade}, State, Query},
+    response::IntoResponse,
+};
+use futures_util::{sink::SinkExt, stream::StreamExt};
+use crate::api::{AppState, WsMessage};
+use tracing::{info, warn};
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+pub struct WsParams {
+    pub device_id: Option<String>,
+}
+
+pub async fn ws_handler(
+    ws: WebSocketUpgrade,
+    Query(params): Query<WsParams>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_socket(socket, params.device_id, state))
+}
+
+async fn handle_socket(socket: WebSocket, device_id: Option<String>, state: AppState) {
+    info!("New WebSocket connection established. Device ID query param: {:?}", device_id);
+    let (mut sender, mut receiver) = socket.split();
+    let mut rx = state.tx.subscribe();
+
+    let mut is_mobile = false;
+    let mut dev_id = String::new();
+
+    if let Some(ref id) = device_id {
+        if id != "desktop" {
+            is_mobile = true;
+            dev_id = id.clone();
+            info!("Mobile device connected via WS: {}", dev_id);
+            let mut active = state.active_connections.lock().await;
+            active.insert(dev_id.clone());
+            // Broadcast connection update
+            let _ = state.tx.send(WsMessage {
+                event: "DeviceConnected".to_string(),
+                data: serde_json::json!({ "device_id": dev_id.clone() }),
+            });
+        }
+    }
+
+    // Spawn a task to forward events from the broadcast channel to the WebSocket sender
+    let dev_id_clone = dev_id.clone();
+    let mut send_task = tokio::spawn(async move {
+        while let Ok(msg) = rx.recv().await {
+            // If the device was unpaired, terminate its WebSocket connection immediately!
+            if msg.event == "DeviceUnpaired" {
+                if let Some(target_id) = msg.data.get("device_id").and_then(|id| id.as_str()) {
+                    if target_id == dev_id_clone {
+                        warn!("Device {} was unpaired. Terminating WebSocket connection.", dev_id_clone);
+                        break;
+                    }
+                }
+            }
+
+            let serialized = serde_json::to_string(&msg).unwrap_or_default();
+            if sender.send(Message::Text(serialized)).await.is_err() {
+                break; // Client disconnected
+            }
+        }
+    });
+
+    // Spawn a task to read from the WebSocket receiver and handle incoming commands
+    let state_clone = state.clone();
+    let mut recv_task = tokio::spawn(async move {
+        while let Some(Ok(msg)) = receiver.next().await {
+            if let Message::Text(text) = msg {
+                // Parse commands sent by client if any (e.g. TriggerCallAction)
+                if let Ok(ws_cmd) = serde_json::from_str::<serde_json::Value>(&text) {
+                    if let Some(cmd) = ws_cmd.get("command").and_then(|c| c.as_str()) {
+                        info!("Received websocket command: {}", cmd);
+                        if cmd == "TriggerCallAction" {
+                            if let Some(data) = ws_cmd.get("data") {
+                                if let (Some(action), Some(_call_id)) = (
+                                    data.get("action").and_then(|a| a.as_str()),
+                                    data.get("call_id").and_then(|c| c.as_str()),
+                                ) {
+                                    info!("Executing websocket triggered call action: {}", action);
+                                    if let Err(e) = state_clone.call_service.execute_action(action).await {
+                                        warn!("Failed to execute call action from websocket: {}", e);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    // Wait for either send or receive task to complete, and abort the other
+    tokio::select! {
+        _ = (&mut send_task) => recv_task.abort(),
+        _ = (&mut recv_task) => send_task.abort(),
+    };
+
+    if is_mobile && !dev_id.is_empty() {
+        info!("Mobile device disconnected via WS: {}", dev_id);
+        let mut active = state.active_connections.lock().await;
+        active.remove(&dev_id);
+        // Broadcast disconnection update
+        let _ = state.tx.send(WsMessage {
+            event: "DeviceDisconnected".to_string(),
+            data: serde_json::json!({ "device_id": dev_id.clone() }),
+        });
+    }
+
+    info!("WebSocket connection closed.");
+}

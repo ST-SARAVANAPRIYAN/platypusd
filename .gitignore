@@ -1,0 +1,24 @@
+# Rust build files
+/target/
+
+# Node/Vite build files
+/desktop/node_modules/
+/desktop/dist/
+/desktop/.svelte-kit/
+/desktop/.env
+/desktop/src-tauri/target/
+
+# Android build/gradle files
+/android/.gradle/
+/android/local.properties
+/android/app/build/
+/android/build/
+*.class
+
+# Log files and SQLite debug databases
+*.log
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+.DS_Store
