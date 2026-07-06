@@ -355,6 +355,65 @@ impl CallService {
             
         Ok(())
     }
+
+    pub async fn apply_speaker_mode_routing(&self) -> anyhow::Result<()> {
+        // Clean up first
+        let _ = self.cleanup_audio_routing().await;
+
+        let mode = self.get_speaker_mode().await;
+        if mode == "mobile_as_speaker" {
+            info!("Establishing real-time loopback for Mobile as Desktop Speaker...");
+            let sources = get_pactl_list("sources").await?;
+            let sinks = get_pactl_list("sinks").await?;
+            
+            let mac_opt = {
+                let m = self.bluetooth_mac.lock().await;
+                m.clone()
+            };
+
+            let bluez_sink = if let Some(ref mac) = mac_opt {
+                let formatted_mac = mac.replace(":", "_");
+                sinks.iter().find(|s| s.contains("bluez_output") && s.to_lowercase().contains(&formatted_mac.to_lowercase())).cloned()
+            } else {
+                sinks.iter().find(|s| s.contains("bluez_output")).cloned()
+            };
+
+            if let Some(ref b_sink) = bluez_sink {
+                let phys_sink = get_physical_speaker_sink().await;
+                
+                // Switch Bluetooth profile to A2DP (if it's not already) for high quality stereo output
+                if let Some(ref mac) = mac_opt {
+                    let _ = set_bluetooth_profile(mac, false).await; 
+                }
+
+                // Ensure physical sink is unmuted
+                let _ = Command::new("pactl").args(&["set-sink-mute", &phys_sink, "0"]).output().await;
+
+                // Load loopback: PC Speaker Output (phys_sink.monitor) -> Phone Speaker (b_sink)
+                let mod1 = Command::new("pactl")
+                    .args(&["load-module", "module-loopback", &format!("source={}.monitor", phys_sink), &format!("sink={}", b_sink), "latency_msec=120"])
+                    .output()
+                    .await;
+
+                let mut modules = self.loaded_modules.lock().await;
+                if let Ok(m1_out) = mod1 {
+                    if m1_out.status.success() {
+                        let id = String::from_utf8_lossy(&m1_out.stdout).trim().to_string();
+                        info!("Loaded Mobile-as-Speaker Loopback: {}", id);
+                        modules.push(id);
+                    } else {
+                        warn!("Failed to load loopback module: {:?}", String::from_utf8_lossy(&m1_out.stderr));
+                    }
+                }
+            } else {
+                warn!("No bluetooth audio sink (bluez_output) discovered for routing.");
+            }
+        } else {
+            // desktop_as_speaker: only establish routing during calls
+            info!("Role is Desktop as Speaker. Loopbacks will only load during active phone calls.");
+        }
+        Ok(())
+    }
 }
 
 async fn find_bluetooth_card(mac: &str) -> Option<String> {

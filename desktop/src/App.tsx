@@ -39,6 +39,14 @@ export default function App() {
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   const [speakerMode, setSpeakerMode] = useState<string>('desktop_as_speaker');
   const [callSyncEnabled, setCallSyncEnabled] = useState<boolean>(true);
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
+
+  const showToast = (msg: string) => {
+    setToastMsg(msg);
+    setTimeout(() => {
+      setToastMsg(null);
+    }, 2500);
+  };
 
   const fetchClipboardConfig = async () => {
     try {
@@ -669,25 +677,46 @@ export default function App() {
                       <h3>Audio Role Mode Settings</h3>
                       <div className="form-group" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                         <label style={{ fontWeight: 'bold' }}>Audio Role Mode:</label>
-                        <select 
-                          value={speakerMode} 
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setSpeakerMode(val);
-                            saveBluetoothConfig(val, callSyncEnabled);
-                          }}
-                          style={{
-                            background: 'var(--bg-secondary)',
-                            border: '3px solid var(--border-color)',
-                            padding: '0.75rem',
-                            color: 'var(--text)',
-                            fontWeight: 'bold',
-                            outline: 'none'
-                          }}
-                        >
-                          <option value="desktop_as_speaker">Desktop as Speaker (PC plays phone audio)</option>
-                          <option value="mobile_as_speaker">Mobile as Speaker (Phone plays PC audio)</option>
-                        </select>
+                        <div style={{ display: 'flex', border: '3px solid var(--border-color)', background: 'var(--bg-secondary)', padding: '4px' }}>
+                          <button
+                            className={`btn ${speakerMode === 'desktop_as_speaker' ? 'active' : ''}`}
+                            onClick={() => {
+                              setSpeakerMode('desktop_as_speaker');
+                              saveBluetoothConfig('desktop_as_speaker', callSyncEnabled);
+                              showToast('Role Mode: Desktop as Speaker');
+                            }}
+                            style={{
+                              flex: 1,
+                              background: speakerMode === 'desktop_as_speaker' ? 'var(--accent)' : 'transparent',
+                              color: speakerMode === 'desktop_as_speaker' ? 'white' : 'var(--text)',
+                              border: 'none',
+                              padding: '0.75rem',
+                              fontWeight: 'bold',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            Desktop Speaker
+                          </button>
+                          <button
+                            className={`btn ${speakerMode === 'mobile_as_speaker' ? 'active' : ''}`}
+                            onClick={() => {
+                              setSpeakerMode('mobile_as_speaker');
+                              saveBluetoothConfig('mobile_as_speaker', callSyncEnabled);
+                              showToast('Role Mode: Mobile as Speaker');
+                            }}
+                            style={{
+                              flex: 1,
+                              background: speakerMode === 'mobile_as_speaker' ? 'var(--accent)' : 'transparent',
+                              color: speakerMode === 'mobile_as_speaker' ? 'white' : 'var(--text)',
+                              border: 'none',
+                              padding: '0.75rem',
+                              fontWeight: 'bold',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            Mobile Speaker
+                          </button>
+                        </div>
                       </div>
 
                       <div className="form-group" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem' }}>
@@ -699,6 +728,7 @@ export default function App() {
                             const val = e.target.checked;
                             setCallSyncEnabled(val);
                             saveBluetoothConfig(speakerMode, val);
+                            showToast(val ? 'Call Routing Enabled' : 'Call Routing Disabled');
                           }}
                           style={{ width: '20px', height: '20px', accentColor: 'var(--accent)' }}
                         />
@@ -742,6 +772,22 @@ export default function App() {
               </div>
             )}
 
+          </div>
+        )}
+        {toastMsg && (
+          <div className="toast" style={{
+            position: 'fixed',
+            bottom: '2rem',
+            right: '2rem',
+            background: 'var(--accent)',
+            color: 'white',
+            padding: '1rem 1.5rem',
+            border: '3px solid var(--border-color)',
+            boxShadow: '4px 4px 0px var(--border-color)',
+            fontWeight: 'bold',
+            zIndex: 1000
+          }}>
+            ✅ {toastMsg}
           </div>
         )}
       </div>

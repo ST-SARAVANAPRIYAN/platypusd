@@ -432,44 +432,46 @@ class MainActivity : AppCompatActivity() {
             }
             configCard.addView(modeLabel)
 
-            val spinnerContainer = FrameLayout(this).apply {
+            val toggleContainer = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
                 background = getNeobrutalismDrawable(getThemeColor(darkCard, lightCard), getThemeColor(darkBorder, lightBorder), 5)
-                setPadding(10, 5, 10, 5)
+                setPadding(5, 5, 5, 5)
                 layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                    bottomMargin = 20
+                    bottomMargin = 25
                 }
             }
 
-            val modeSpinner = Spinner(this).apply {
-                val options = arrayOf("Desktop as Speaker (PC plays phone audio)", "Mobile as Speaker (Phone plays PC audio)")
-                val adapter = object : ArrayAdapter<String>(this@MainActivity, android.R.layout.simple_spinner_item, options) {
-                    override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
-                        val v = super.getView(position, convertView, parent)
-                        (v as? TextView)?.apply {
-                            setTextColor(getThemeColor(darkText, lightText))
-                            textSize = 14f
-                            setTypeface(null, Typeface.BOLD)
-                        }
-                        return v
-                    }
+            var selectedMode = currentMode
 
-                    override fun getDropDownView(position: Int, convertView: View?, parent: ViewGroup): View {
-                        val v = super.getDropDownView(position, convertView, parent)
-                        v.setBackgroundColor(getThemeColor(darkCard, lightCard))
-                        (v as? TextView)?.apply {
-                            setTextColor(getThemeColor(darkText, lightText))
-                            textSize = 14f
-                        }
-                        return v
-                    }
-                }
-                this.adapter = adapter
-                
-                val selectionIndex = if (currentMode == "desktop_as_speaker") 0 else 1
-                setSelection(selectionIndex)
+            val btnDesktop = Button(this).apply {
+                text = "Desktop Speaker"
+                textSize = 12f
+                setTypeface(null, Typeface.BOLD)
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             }
-            spinnerContainer.addView(modeSpinner)
-            configCard.addView(spinnerContainer)
+
+            val btnMobile = Button(this).apply {
+                text = "Mobile Speaker"
+                textSize = 12f
+                setTypeface(null, Typeface.BOLD)
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
+
+            fun updateToggleVisuals() {
+                if (selectedMode == "desktop_as_speaker") {
+                    btnDesktop.background = getNeobrutalismDrawable(accentColor, getThemeColor(darkBorder, lightBorder), 5)
+                    btnDesktop.setTextColor(Color.WHITE)
+                    btnMobile.background = getNeobrutalismDrawable(Color.TRANSPARENT, Color.TRANSPARENT, 0)
+                    btnMobile.setTextColor(getThemeColor(darkText, lightText))
+                } else {
+                    btnMobile.background = getNeobrutalismDrawable(accentColor, getThemeColor(darkBorder, lightBorder), 5)
+                    btnMobile.setTextColor(Color.WHITE)
+                    btnDesktop.background = getNeobrutalismDrawable(Color.TRANSPARENT, Color.TRANSPARENT, 0)
+                    btnDesktop.setTextColor(getThemeColor(darkText, lightText))
+                }
+            }
+
+            updateToggleVisuals()
 
             // 2. Call Sync Toggle
             val callToggle = Switch(this).apply {
@@ -479,7 +481,46 @@ class MainActivity : AppCompatActivity() {
                 textSize = 15f
                 setPadding(0, 0, 0, 20)
             }
+
+            val saveConfig = { modeVal: String, callSyncVal: Boolean, showToast: Boolean ->
+                sharedPrefs.edit()
+                    .putString("bluetooth_speaker_mode", modeVal)
+                    .putBoolean("bluetooth_call_sync_enabled", callSyncVal)
+                    .apply()
+                
+                service?.updateBluetoothConfigOnDaemon(modeVal, callSyncVal)
+                if (showToast) {
+                    val toastText = if (modeVal == "desktop_as_speaker") "Role Mode: Desktop as Speaker" else "Role Mode: Mobile as Speaker"
+                    Toast.makeText(this@MainActivity, "✅ $toastText", Toast.LENGTH_SHORT).show()
+                }
+            }
+
+            btnDesktop.setOnClickListener {
+                if (selectedMode != "desktop_as_speaker") {
+                    selectedMode = "desktop_as_speaker"
+                    updateToggleVisuals()
+                    saveConfig(selectedMode, callToggle.isChecked, true)
+                }
+            }
+
+            btnMobile.setOnClickListener {
+                if (selectedMode != "mobile_as_speaker") {
+                    selectedMode = "mobile_as_speaker"
+                    updateToggleVisuals()
+                    saveConfig(selectedMode, callToggle.isChecked, true)
+                }
+            }
+
+            toggleContainer.addView(btnDesktop)
+            toggleContainer.addView(btnMobile)
+            configCard.addView(toggleContainer)
+
             configCard.addView(callToggle)
+
+            callToggle.setOnCheckedChangeListener { _, isChecked ->
+                saveConfig(selectedMode, isChecked, false)
+                Toast.makeText(this@MainActivity, if (isChecked) "✅ Call Routing Enabled" else "✅ Call Routing Disabled", Toast.LENGTH_SHORT).show()
+            }
 
             // 3. Receive PC Audio Stream Toggle
             val audioStreamToggle = Switch(this).apply {
@@ -489,31 +530,6 @@ class MainActivity : AppCompatActivity() {
                 textSize = 15f
             }
             configCard.addView(audioStreamToggle)
-
-            // Save listeners
-            val saveConfig = {
-                val modeIndex = modeSpinner.selectedItemPosition
-                val modeVal = if (modeIndex == 0) "desktop_as_speaker" else "mobile_as_speaker"
-                val callSyncVal = callToggle.isChecked
-                
-                sharedPrefs.edit()
-                    .putString("bluetooth_speaker_mode", modeVal)
-                    .putBoolean("bluetooth_call_sync_enabled", callSyncVal)
-                    .apply()
-                
-                service?.updateBluetoothConfigOnDaemon(modeVal, callSyncVal)
-            }
-
-            modeSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-                override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                    saveConfig()
-                }
-                override fun onNothingSelected(parent: AdapterView<*>?) {}
-            }
-
-            callToggle.setOnCheckedChangeListener { _, _ ->
-                saveConfig()
-            }
 
             audioStreamToggle.setOnCheckedChangeListener { _, isChecked ->
                 if (service != null) {
