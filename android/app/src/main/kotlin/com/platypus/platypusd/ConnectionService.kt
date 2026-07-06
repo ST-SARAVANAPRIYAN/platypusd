@@ -627,6 +627,12 @@ class ConnectionService : Service() {
                             .putBoolean("bluetooth_call_sync_enabled", callSyncEnabled)
                             .apply()
 
+                        if (speakerMode == "mobile_as_speaker") {
+                            startDesktopAudioStream()
+                        } else {
+                            stopDesktopAudioStream()
+                        }
+
                         // Trigger UI update if MainActivity is active
                         scope.launch(Dispatchers.Main) {
                             MainActivity.instance?.let { activity ->
