@@ -216,19 +216,26 @@ impl CallService {
                     let _ = Command::new("pactl").args(&["set-sink-mute", b_sink, "0"]).output().await;
                     let _ = Command::new("pactl").args(&["set-sink-volume", b_sink, "100%"]).output().await;
 
-                    // Ensure system default source/sink are unmuted
-                    let _ = Command::new("pactl").args(&["set-source-mute", "@DEFAULT_SOURCE@", "0"]).output().await;
-                    let _ = Command::new("pactl").args(&["set-sink-mute", "@DEFAULT_SINK@", "0"]).output().await;
+                    // Resolve physical microphone source and speaker sink
+                    let phys_source = get_physical_mic_source().await;
+                    let phys_sink = get_physical_speaker_sink().await;
+                    info!("Using physical microphone source: {}, speaker sink: {}", phys_source, phys_sink);
 
-                    // Loop 1: Phone MIC (bluez source) -> PC Speakers (default sink)
+                    // Ensure physical source & sink are unmuted and set volume
+                    let _ = Command::new("pactl").args(&["set-source-mute", &phys_source, "0"]).output().await;
+                    let _ = Command::new("pactl").args(&["set-source-volume", &phys_source, "100%"]).output().await;
+                    let _ = Command::new("pactl").args(&["set-sink-mute", &phys_sink, "0"]).output().await;
+                    let _ = Command::new("pactl").args(&["set-sink-volume", &phys_sink, "100%"]).output().await;
+
+                    // Loop 1: Phone MIC (bluez source) -> PC Speakers (resolved physical sink)
                     let mod1 = Command::new("pactl")
-                        .args(&["load-module", "module-loopback", &format!("source={}", b_source), "sink=@DEFAULT_SINK@", "latency_msec=60"])
+                        .args(&["load-module", "module-loopback", &format!("source={}", b_source), &format!("sink={}", phys_sink), "latency_msec=60"])
                         .output()
                         .await;
                         
-                    // Loop 2: PC MIC (default source) -> Phone Speaker (bluez sink)
+                    // Loop 2: PC MIC (resolved physical source) -> Phone Speaker (bluez sink)
                     let mod2 = Command::new("pactl")
-                        .args(&["load-module", "module-loopback", "source=@DEFAULT_SOURCE@", &format!("sink={}", b_sink), "latency_msec=60"])
+                        .args(&["load-module", "module-loopback", &format!("source={}", phys_source), &format!("sink={}", b_sink), "latency_msec=60"])
                         .output()
                         .await;
                         
@@ -422,4 +429,49 @@ async fn get_pactl_list(type_str: &str) -> anyhow::Result<Vec<String>> {
         }
     }
     Ok(names)
+}
+
+async fn get_default_source_or_sink(default_type: &str) -> Option<String> {
+    let output = Command::new("pactl")
+        .arg("info")
+        .output()
+        .await
+        .ok()?;
+        
+    if output.status.success() {
+        let text = String::from_utf8_lossy(&output.stdout);
+        for line in text.lines() {
+            if line.starts_with(default_type) {
+                return line.split(':').nth(1).map(|s| s.trim().to_string());
+            }
+        }
+    }
+    None
+}
+
+async fn get_physical_mic_source() -> String {
+    let default_source = match get_default_source_or_sink("Default Source").await {
+        Some(s) => s,
+        None => "@DEFAULT_SOURCE@".to_string(),
+    };
+
+    if default_source.contains(".monitor") || default_source.is_empty() || default_source == "@DEFAULT_SOURCE@" {
+        if let Ok(sources) = get_pactl_list("sources").await {
+            let physical = sources.into_iter()
+                .find(|s| s.contains("input") && !s.contains(".monitor"));
+            if let Some(src) = physical {
+                info!("Default source is a monitor or invalid. Selected physical input source: {}", src);
+                return src;
+            }
+        }
+    }
+    
+    default_source
+}
+
+async fn get_physical_speaker_sink() -> String {
+    match get_default_source_or_sink("Default Sink").await {
+        Some(s) if !s.is_empty() => s,
+        _ => "@DEFAULT_SINK@".to_string(),
+    }
 }
