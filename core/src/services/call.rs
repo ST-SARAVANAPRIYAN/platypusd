@@ -372,59 +372,41 @@ impl CallService {
 
         let mode = self.get_speaker_mode().await;
         if mode == "mobile_as_speaker" {
-            info!("Establishing real-time loopback for Mobile as Desktop Speaker...");
-            let _sources = get_pactl_list("sources").await?;
-            let sinks = get_pactl_list("sinks").await?;
+            info!("Establishing virtual routing for Mobile as Desktop Speaker...");
             
-            let mac_opt = {
-                let m = self.bluetooth_mac.lock().await;
-                m.clone()
-            };
-
-            let bluez_sink = if let Some(ref mac) = mac_opt {
-                let formatted_mac = mac.replace(":", "_");
-                if let Some(s) = sinks.iter().find(|s| s.contains("bluez_output") && s.to_lowercase().contains(&formatted_mac.to_lowercase())).cloned() {
-                    Some(s)
-                } else {
-                    sinks.iter().find(|s| s.contains("bluez_output")).cloned()
-                }
-            } else {
-                sinks.iter().find(|s| s.contains("bluez_output")).cloned()
-            };
-
-            if let Some(ref b_sink) = bluez_sink {
-                let phys_sink = get_physical_speaker_sink().await;
-                
-                // Switch Bluetooth profile to A2DP (if it's not already) for high quality stereo output
-                if let Some(ref mac) = mac_opt {
-                    let _ = set_bluetooth_profile(mac, false).await; 
-                }
-
-                // Ensure physical sink is unmuted
-                let _ = Command::new("pactl").args(&["set-sink-mute", &phys_sink, "0"]).output().await;
-
-                // Load loopback: PC Speaker Output (phys_sink.monitor) -> Phone Speaker (b_sink)
-                let mod1 = Command::new("pactl")
-                    .args(&["load-module", "module-loopback", &format!("source={}.monitor", phys_sink), &format!("sink={}", b_sink), "latency_msec=120"])
+            // 1. Ensure the null sink is loaded
+            let sinks = get_pactl_list("sinks").await.unwrap_or_default();
+            let null_sink_exists = sinks.iter().any(|s| s.contains("platypus_null_sink"));
+            if !null_sink_exists {
+                info!("Loading platypus_null_sink module...");
+                let _ = Command::new("pactl")
+                    .args(&["load-module", "module-null-sink", "sink_name=platypus_null_sink", "sink_properties=device.description=PlatypusNullSink"])
                     .output()
                     .await;
-
-                let mut modules = self.loaded_modules.lock().await;
-                if let Ok(m1_out) = mod1 {
-                    if m1_out.status.success() {
-                        let id = String::from_utf8_lossy(&m1_out.stdout).trim().to_string();
-                        info!("Loaded Mobile-as-Speaker Loopback: {}", id);
-                        modules.push(id);
-                    } else {
-                        warn!("Failed to load loopback module: {:?}", String::from_utf8_lossy(&m1_out.stderr));
-                    }
-                }
-            } else {
-                warn!("No bluetooth audio sink (bluez_output) discovered for routing.");
             }
+
+            // 2. Set the default sink to the null sink so PC plays exclusively to it
+            let _ = Command::new("pactl").args(&["set-default-sink", "platypus_null_sink"]).output().await;
         } else {
-            // desktop_as_speaker: only establish routing during calls
-            info!("Role is Desktop as Speaker. Loopbacks will only load during active phone calls.");
+            // desktop_as_speaker
+            info!("Restoring physical speaker routing...");
+            
+            // 1. Get the actual physical sink
+            let phys_sink = get_actual_physical_sink().await;
+            
+            // 2. Set default sink back to physical
+            if phys_sink != "@DEFAULT_SINK@" {
+                let _ = Command::new("pactl").args(&["set-default-sink", &phys_sink]).output().await;
+            }
+
+            // 3. Unload the null sink module if it exists
+            let modules = get_pactl_modules().await;
+            for (id, name, args) in modules {
+                if name == "module-null-sink" && args.contains("platypus_null_sink") {
+                    info!("Unloading platypus_null_sink module index: {}", id);
+                    let _ = Command::new("pactl").args(&["unload-module", &id]).output().await;
+                }
+            }
         }
         Ok(())
     }
@@ -595,4 +577,31 @@ async fn get_physical_speaker_sink() -> String {
         Some(s) if !s.is_empty() => s,
         _ => "@DEFAULT_SINK@".to_string(),
     }
+}
+
+async fn get_actual_physical_sink() -> String {
+    let sinks = get_pactl_list("sinks").await.unwrap_or_default();
+    if let Some(sink) = sinks.iter().find(|s| s.contains("alsa_output")).cloned() {
+        sink
+    } else {
+        "@DEFAULT_SINK@".to_string()
+    }
+}
+
+async fn get_pactl_modules() -> Vec<(String, String, String)> {
+    let output = Command::new("pactl").args(&["list", "modules", "short"]).output().await;
+    let mut result = Vec::new();
+    if let Ok(out) = output {
+        let text = String::from_utf8_lossy(&out.stdout);
+        for line in text.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 {
+                let id = parts[0].to_string();
+                let name = parts[1].to_string();
+                let args = parts[2..].join(" ");
+                result.push((id, name, args));
+            }
+        }
+    }
+    result
 }
