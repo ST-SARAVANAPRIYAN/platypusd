@@ -91,12 +91,17 @@ async fn handle_socket(socket: WebSocket, device_id: Option<String>, state: AppS
                                     data.get("is_connected").and_then(|c| c.as_bool()),
                                     data.get("device_id").and_then(|d| d.as_str()),
                                 ) {
-                                    info!("Bluetooth connection status update received from {}: connected={}", dev_id, is_connected);
+                                    let mac = data.get("bluetooth_mac").and_then(|m| m.as_str()).map(|s| s.to_string());
+                                    info!("Bluetooth connection status update received from {}: connected={}, mac={:?}", dev_id, is_connected, mac);
                                     let mut active_bt = state_clone.active_bluetooth.lock().await;
                                     if is_connected {
                                         active_bt.insert(dev_id.to_string());
+                                        if let Some(ref m) = mac {
+                                            state_clone.call_service.set_bluetooth_mac(Some(m.clone())).await;
+                                        }
                                     } else {
                                         active_bt.remove(dev_id);
+                                        state_clone.call_service.set_bluetooth_mac(None).await;
                                     }
                                     // Broadcast Bluetooth state change so the desktop UI updates instantly
                                     let _ = state_clone.tx.send(WsMessage {

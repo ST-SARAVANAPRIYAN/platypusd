@@ -23,6 +23,8 @@ pub struct ActiveCall {
 pub struct CallService {
     active_call: Arc<Mutex<Option<ActiveCall>>>,
     loaded_modules: Arc<Mutex<Vec<String>>>,
+    bluetooth_mac: Arc<Mutex<Option<String>>>,
+    original_bluetooth_profile: Arc<Mutex<Option<String>>>,
 }
 
 impl CallService {
@@ -30,7 +32,14 @@ impl CallService {
         Self {
             active_call: Arc::new(Mutex::new(None)),
             loaded_modules: Arc::new(Mutex::new(Vec::new())),
+            bluetooth_mac: Arc::new(Mutex::new(None)),
+            original_bluetooth_profile: Arc::new(Mutex::new(None)),
         }
+    }
+
+    pub async fn set_bluetooth_mac(&self, mac: Option<String>) {
+        let mut b_mac = self.bluetooth_mac.lock().await;
+        *b_mac = mac;
     }
 
     pub async fn update_call_state(&self, call: ActiveCall) -> Option<ActiveCall> {
@@ -138,9 +147,29 @@ impl CallService {
         info!("Setting up desktop audio routing loops for call...");
         
         let loaded_modules = self.loaded_modules.clone();
+        let bluetooth_mac = self.bluetooth_mac.clone();
+        let original_bluetooth_profile = self.original_bluetooth_profile.clone();
         
         // Spawn background task to wait for SCO channels (Bluetooth source/sink) to be created by Pipewire
         tokio::spawn(async move {
+            let mac_opt = {
+                let m = bluetooth_mac.lock().await;
+                m.clone()
+            };
+
+            if let Some(ref mac) = mac_opt {
+                match set_bluetooth_profile(mac, true).await {
+                    Ok(Some(old_profile)) => {
+                        let mut orig = original_bluetooth_profile.lock().await;
+                        *orig = Some(old_profile);
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        warn!("Failed to set Bluetooth card profile to headset: {}", e);
+                    }
+                }
+            }
+
             let mut attempts = 0;
             let max_attempts = 20; // 10 seconds
             
@@ -157,10 +186,26 @@ impl CallService {
                     Err(_) => continue,
                 };
                 
-                let bluez_source = sources.iter().find(|s| s.contains("bluez_input"));
-                let bluez_sink = sinks.iter().find(|s| s.contains("bluez_output"));
+                let mac_opt = {
+                    let m = bluetooth_mac.lock().await;
+                    m.clone()
+                };
+
+                let bluez_source = if let Some(ref mac) = mac_opt {
+                    let formatted_mac = mac.replace(":", "_");
+                    sources.iter().find(|s| s.contains("bluez_input") && s.to_lowercase().contains(&formatted_mac.to_lowercase())).cloned()
+                } else {
+                    sources.iter().find(|s| s.contains("bluez_input")).cloned()
+                };
+
+                let bluez_sink = if let Some(ref mac) = mac_opt {
+                    let formatted_mac = mac.replace(":", "_");
+                    sinks.iter().find(|s| s.contains("bluez_output") && s.to_lowercase().contains(&formatted_mac.to_lowercase())).cloned()
+                } else {
+                    sinks.iter().find(|s| s.contains("bluez_output")).cloned()
+                };
                 
-                if let (Some(b_source), Some(b_sink)) = (bluez_source, bluez_sink) {
+                if let (Some(ref b_source), Some(ref b_sink)) = (bluez_source, bluez_sink) {
                     info!("Bluetooth call audio nodes discovered. Source: {}, Sink: {}", b_source, b_sink);
                     
                     // Unmute and set Bluetooth Source volume to 100%
@@ -228,9 +273,136 @@ impl CallService {
             .args(&["unload-module", "module-loopback"])
             .output()
             .await;
+
+        // Restore original Bluetooth profile
+        let mac_opt = {
+            let m = self.bluetooth_mac.lock().await;
+            m.clone()
+        };
+        
+        if let Some(ref mac) = mac_opt {
+            let orig_profile = {
+                let mut orig = self.original_bluetooth_profile.lock().await;
+                orig.take()
+            };
+            
+            let card_name = match find_bluetooth_card(mac).await {
+                Some(name) => name,
+                None => {
+                    warn!("Bluetooth card for MAC {} not found during cleanup.", mac);
+                    return Ok(());
+                }
+            };
+            
+            let profile_to_set = orig_profile.unwrap_or_else(|| "a2dp-sink".to_string());
+            info!("Restoring card {} profile to {}", card_name, profile_to_set);
+            let _ = Command::new("pactl")
+                .args(&["set-card-profile", &card_name, &profile_to_set])
+                .output()
+                .await;
+        }
             
         Ok(())
     }
+}
+
+async fn find_bluetooth_card(mac: &str) -> Option<String> {
+    let formatted_mac = mac.replace(":", "_").to_lowercase();
+    let cards = get_pactl_list("cards").await.unwrap_or_default();
+    if let Some(card) = cards.iter().find(|c| c.to_lowercase().contains(&formatted_mac)) {
+        return Some(card.clone());
+    }
+    let raw_mac = mac.to_lowercase();
+    cards.into_iter().find(|c| c.to_lowercase().contains(&raw_mac))
+}
+
+async fn set_bluetooth_profile(mac: &str, headset: bool) -> anyhow::Result<Option<String>> {
+    let card_name = match find_bluetooth_card(mac).await {
+        Some(name) => name,
+        None => {
+            warn!("Bluetooth card for MAC {} not found.", mac);
+            return Ok(None);
+        }
+    };
+
+    info!("Found card name: {}", card_name);
+
+    // Get card details to find profiles and active profile
+    let output = Command::new("pactl")
+        .args(&["list", "cards"])
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        anyhow::bail!("Failed to run pactl list cards");
+    }
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut current_card_match = false;
+    let mut profiles = Vec::new();
+    let mut active_profile = None;
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("Name: ") {
+            let name = trimmed.strip_prefix("Name: ").unwrap().trim();
+            if name == card_name {
+                current_card_match = true;
+            } else {
+                current_card_match = false;
+            }
+        }
+
+        if current_card_match {
+            if trimmed.starts_with("Active Profile: ") {
+                active_profile = trimmed.strip_prefix("Active Profile: ").map(|s| s.trim().to_string());
+            } else if trimmed.starts_with("Profiles:") {
+                // We are in the profiles section
+            } else if trimmed.contains(":") && trimmed.contains("sinks:") {
+                // A profile line: profile_name: Description (sinks: X, sources: Y, ...)
+                if let Some(p_name) = trimmed.split(':').next() {
+                    profiles.push(p_name.trim().to_string());
+                }
+            }
+        }
+    }
+
+    info!("Profiles found for {}: {:?}", card_name, profiles);
+    info!("Active profile for {}: {:?}", card_name, active_profile);
+
+    if headset {
+        // Find a suitable headset profile
+        let target_profile = profiles.iter()
+            .find(|p| p.contains("headset-head-unit") || p.contains("headset-audio-gateway") || p.contains("handsfree-audio-gateway") || p.contains("handsfree") || p.contains("hfp") || p.contains("hsp") || p.contains("headset"))
+            .cloned();
+
+        if let Some(profile) = target_profile {
+            info!("Switching card {} to profile {}", card_name, profile);
+            let _ = Command::new("pactl")
+                .args(&["set-card-profile", &card_name, &profile])
+                .output()
+                .await;
+        } else {
+            warn!("No suitable headset profile found for card {}", card_name);
+        }
+    } else {
+        // Switching back: try to find a2dp-sink, a2dp, or media profile
+        let target_profile = profiles.iter()
+            .find(|p| p.contains("a2dp-sink") || p.contains("a2dp") || p.contains("high-quality") || p.contains("media"))
+            .cloned();
+
+        if let Some(profile) = target_profile {
+            info!("Switching card {} back to profile {}", card_name, profile);
+            let _ = Command::new("pactl")
+                .args(&["set-card-profile", &card_name, &profile])
+                .output()
+                .await;
+        } else {
+            warn!("No suitable A2DP profile found to restore card {}", card_name);
+        }
+    }
+
+    Ok(active_profile)
 }
 
 async fn get_pactl_list(type_str: &str) -> anyhow::Result<Vec<String>> {

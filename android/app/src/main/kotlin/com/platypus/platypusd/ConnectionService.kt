@@ -73,7 +73,7 @@ class ConnectionService : Service() {
     }
 
     private lateinit var clipboardManager: ClipboardManager
-    private var lastSyncedClipboardText = ""
+    var lastSyncedClipboardText = ""
 
     private val nsdManager by lazy { getSystemService(Context.NSD_SERVICE) as NsdManager }
     private var discoveryListener: NsdManager.DiscoveryListener? = null
@@ -307,6 +307,7 @@ class ConnectionService : Service() {
                 isWsConnected = true
                 Log.i(TAG, "WebSocket event connection opened to: $wsUrl")
                 isBluetoothConnectedCached = null // force update
+                getClipboardConfigFromDaemon()
                 scope.launch {
                     while (isWsConnected) {
                         checkBluetoothConnectionToHost()
@@ -367,15 +368,34 @@ class ConnectionService : Service() {
     }
 
     /* ---------------- Clipboard Operations ---------------- */
+    private var lastIncomingSyncTime = 0L
+
     private fun setupClipboardListener() {
         clipboardManager.addPrimaryClipChangedListener {
             val clipData = clipboardManager.primaryClip
             if (clipData != null && clipData.itemCount > 0) {
                 val clipText = clipData.getItemAt(0).text?.toString() ?: ""
-                if (clipText.isNotEmpty() && clipText != lastSyncedClipboardText) {
-                    Log.i(TAG, "Local phone copy event detected. Syncing clipboard to desktop.")
-                    lastSyncedClipboardText = clipText
-                    relayClipboardState(clipText)
+                val trimmedText = clipText.trim()
+                val trimmedLast = lastSyncedClipboardText.trim()
+
+                if (trimmedText.isNotEmpty() && trimmedText != trimmedLast) {
+                    val timePassed = System.currentTimeMillis() - lastIncomingSyncTime
+                    if (timePassed < 1500) {
+                        Log.d(TAG, "Ignoring local clipboard change due to recent incoming sync ($timePassed ms ago)")
+                        return@addPrimaryClipChangedListener
+                    }
+
+                    val sharedPrefs = getSharedPreferences("platypusd_prefs", Context.MODE_PRIVATE)
+                    val direction = sharedPrefs.getString("clipboard_direction", "bidirectional")
+                    val autoSync = sharedPrefs.getBoolean("clipboard_auto_sync", true)
+
+                    if (autoSync && (direction == "bidirectional" || direction == "mobile_to_desktop")) {
+                        Log.i(TAG, "Local phone copy event detected. Syncing clipboard to desktop.")
+                        lastSyncedClipboardText = clipText
+                        relayClipboardState(clipText)
+                    } else {
+                        Log.i(TAG, "Local phone copy event ignored (direction: $direction, autoSync: $autoSync)")
+                    }
                 }
             }
         }
@@ -383,8 +403,99 @@ class ConnectionService : Service() {
 
     private fun syncToAndroidClipboard(text: String) {
         lastSyncedClipboardText = text
+        lastIncomingSyncTime = System.currentTimeMillis()
         val clip = ClipData.newPlainText("platypusd-sync", text)
         clipboardManager.setPrimaryClip(clip)
+    }
+
+    fun syncClipboardIfChanged() {
+        val clipData = clipboardManager.primaryClip
+        if (clipData != null && clipData.itemCount > 0) {
+            val clipText = clipData.getItemAt(0).text?.toString() ?: ""
+            val trimmedText = clipText.trim()
+            val trimmedLast = lastSyncedClipboardText.trim()
+
+            if (trimmedText.isNotEmpty() && trimmedText != trimmedLast) {
+                val timePassed = System.currentTimeMillis() - lastIncomingSyncTime
+                if (timePassed < 1500) {
+                    Log.d(TAG, "Ignoring resume clipboard check due to recent incoming sync ($timePassed ms ago)")
+                    return
+                }
+
+                val sharedPrefs = getSharedPreferences("platypusd_prefs", Context.MODE_PRIVATE)
+                val direction = sharedPrefs.getString("clipboard_direction", "bidirectional")
+                val autoSync = sharedPrefs.getBoolean("clipboard_auto_sync", true)
+
+                if (autoSync && (direction == "bidirectional" || direction == "mobile_to_desktop")) {
+                    Log.i(TAG, "On resume: local copy event detected. Syncing clipboard to desktop.")
+                    lastSyncedClipboardText = clipText
+                    relayClipboardState(clipText)
+                }
+            }
+        }
+    }
+
+    fun getClipboardConfigFromDaemon() {
+        if (!isWsConnected) return
+        scope.launch {
+            try {
+                val request = Request.Builder()
+                    .url("$daemonUrl/api/v1/clipboard/config")
+                    .get()
+                    .build()
+
+                client.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        val bodyStr = response.body?.string() ?: ""
+                        Log.i(TAG, "Fetched clipboard config: $bodyStr")
+                        val json = JSONObject(bodyStr)
+                        val direction = json.optString("direction", "bidirectional")
+                        val autoSync = json.optBoolean("auto_sync", true)
+
+                        val sharedPrefs = getSharedPreferences("platypusd_prefs", Context.MODE_PRIVATE)
+                        sharedPrefs.edit()
+                            .putString("clipboard_direction", direction)
+                            .putBoolean("clipboard_auto_sync", autoSync)
+                            .apply()
+
+                        // Trigger UI update if MainActivity is active
+                        scope.launch(Dispatchers.Main) {
+                            MainActivity.instance?.refreshClipboardUi()
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error fetching clipboard config: ${e.message}")
+            }
+        }
+    }
+
+    fun updateClipboardConfigOnDaemon(direction: String, autoSync: Boolean) {
+        if (!isWsConnected) return
+        scope.launch {
+            try {
+                val json = JSONObject().apply {
+                    put("direction", direction)
+                    put("auto_sync", autoSync)
+                }
+                val mediaType = "application/json; charset=utf-8".toMediaType()
+                val body = json.toString().toRequestBody(mediaType)
+                val request = Request.Builder()
+                    .url("$daemonUrl/api/v1/clipboard/config")
+                    .post(body)
+                    .build()
+
+                client.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        Log.i(TAG, "Successfully updated clipboard config on daemon.")
+                    } else {
+                        Log.e(TAG, "Failed to update clipboard config: ${response.code}")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error updating clipboard config on daemon: ${e.message}")
+            }
+        }
     }
 
     private fun handleCallActionCommand(action: String) {
@@ -428,14 +539,19 @@ class ConnectionService : Service() {
 
         val btAdapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter()
         var currentStatus = false
+        var activeMac = ""
+        var activeName = ""
 
         if (btAdapter != null && btAdapter.isEnabled) {
             try {
                 if (androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.BLUETOOTH_CONNECT) == android.content.pm.PackageManager.PERMISSION_GRANTED || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
                     val sharedPrefs = getSharedPreferences("platypusd_prefs", Context.MODE_PRIVATE)
                     val selectedMac = sharedPrefs.getString("selected_bluetooth_mac", null)
+                    val selectedName = sharedPrefs.getString("selected_bluetooth_name", "")
 
                     if (selectedMac != null) {
+                        activeMac = selectedMac
+                        activeName = selectedName ?: ""
                         if (connectedBluetoothDevices.contains(selectedMac)) {
                             currentStatus = true
                         } else {
@@ -460,6 +576,8 @@ class ConnectionService : Service() {
                                 val devName = (device.name ?: "").lowercase()
                                 if (devName.contains("edith") || devName.contains("linux") || devName.contains("pc") || devName.contains("desktop") || devName.contains("computer")) {
                                     currentStatus = true
+                                    activeMac = device.address
+                                    activeName = device.name ?: ""
                                     break
                                 }
                             }
@@ -476,11 +594,11 @@ class ConnectionService : Service() {
         if (isBluetoothConnectedCached != currentStatus) {
             isBluetoothConnectedCached = currentStatus
             Log.i(TAG, "Bluetooth connection status to host changed: $currentStatus. Sending to backend.")
-            sendBluetoothStatus(currentStatus)
+            sendBluetoothStatus(currentStatus, activeMac, activeName)
         }
     }
 
-    private fun sendBluetoothStatus(isConnected: Boolean) {
+    private fun sendBluetoothStatus(isConnected: Boolean, mac: String, name: String) {
         if (activeWebSocket == null || !isWsConnected) return
         scope.launch {
             try {
@@ -489,6 +607,8 @@ class ConnectionService : Service() {
                     put("data", org.json.JSONObject().apply {
                         put("device_id", deviceId)
                         put("is_connected", isConnected)
+                        put("bluetooth_mac", mac)
+                        put("bluetooth_name", name)
                     })
                 }
                 activeWebSocket?.send(json.toString())
@@ -498,7 +618,7 @@ class ConnectionService : Service() {
         }
     }
 
-    private fun relayClipboardState(text: String) {
+    fun relayClipboardState(text: String) {
         scope.launch {
             try {
                 val json = JSONObject().apply {

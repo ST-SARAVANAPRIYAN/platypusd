@@ -91,16 +91,6 @@ async fn main() -> anyhow::Result<()> {
                             "is_connected": true
                         }),
                     });
-                } else if !is_connected_now && is_connected_currently {
-                    info!("Bluetooth disconnection detected dynamically for device: {} ({})", name, id);
-                    active_bt.remove(&id);
-                    let _ = tx_clone.send(api::WsMessage {
-                        event: "BluetoothStateChanged".to_string(),
-                        data: serde_json::json!({
-                            "device_id": id,
-                            "is_connected": false
-                        }),
-                    });
                 }
             }
         }

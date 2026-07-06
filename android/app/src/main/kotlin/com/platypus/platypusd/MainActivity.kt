@@ -86,6 +86,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        instance = this
         
         initLayout()
 
@@ -99,12 +100,21 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        instance = this
         handler.post(updateRunnable)
+        ConnectionService.instance?.syncClipboardIfChanged()
     }
 
     override fun onPause() {
         super.onPause()
         handler.removeCallbacks(updateRunnable)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        if (instance == this) {
+            instance = null
+        }
     }
 
     private fun getThemeColor(darkVal: Int, lightVal: Int): Int {
@@ -121,6 +131,19 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun initLayout() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            window.statusBarColor = getThemeColor(darkBg, lightBg)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                var flags = window.decorView.systemUiVisibility
+                flags = if (isDarkMode) {
+                    flags and View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR.inv()
+                } else {
+                    flags or View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+                }
+                window.decorView.systemUiVisibility = flags
+            }
+        }
+
         // Setup root layout
         val rootLayout = RelativeLayout(this).apply {
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
@@ -355,6 +378,111 @@ class MainActivity : AppCompatActivity() {
             visibility = if (currentTab == "clipboard") View.VISIBLE else View.GONE
         }
 
+        // 1. Config Card
+        val clipConfigCard = createCardLayout()
+        val configTitle = TextView(this).apply {
+            text = "Clipboard Sync Options"
+            textSize = 16f
+            setTextColor(getThemeColor(darkText, lightText))
+            setTypeface(null, Typeface.BOLD)
+            setPadding(0, 0, 0, 15)
+        }
+        clipConfigCard.addView(configTitle)
+
+        val autoSyncPrefs = getSharedPreferences("platypusd_prefs", Context.MODE_PRIVATE)
+        val currentAutoSync = autoSyncPrefs.getBoolean("clipboard_auto_sync", true)
+        val currentDirection = autoSyncPrefs.getString("clipboard_direction", "bidirectional") ?: "bidirectional"
+
+        val autoSyncSwitch = Switch(this).apply {
+            text = "Enable Automatic Sync"
+            setTextColor(getThemeColor(darkText, lightText))
+            isChecked = currentAutoSync
+            textSize = 14f
+            setPadding(0, 0, 0, 20)
+        }
+        clipConfigCard.addView(autoSyncSwitch)
+
+        val directionLabel = TextView(this).apply {
+            text = "Sync Direction:"
+            textSize = 13f
+            setTextColor(getThemeColor(darkText, lightText))
+            setTypeface(null, Typeface.BOLD)
+            setPadding(0, 10, 0, 10)
+        }
+        clipConfigCard.addView(directionLabel)
+
+        val spinnerContainer = FrameLayout(this).apply {
+            background = getNeobrutalismDrawable(getThemeColor(darkCard, lightCard), getThemeColor(darkBorder, lightBorder), 5)
+            setPadding(10, 5, 10, 5)
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                bottomMargin = 20
+            }
+        }
+
+        val directionSpinner = Spinner(this).apply {
+            val options = arrayOf("Bidirectional", "Desktop to Mobile", "Mobile to Desktop")
+            val adapter = object : ArrayAdapter<String>(this@MainActivity, android.R.layout.simple_spinner_item, options) {
+                override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+                    val v = super.getView(position, convertView, parent)
+                    (v as? TextView)?.apply {
+                        setTextColor(getThemeColor(darkText, lightText))
+                        textSize = 14f
+                        setTypeface(null, Typeface.BOLD)
+                    }
+                    return v
+                }
+
+                override fun getDropDownView(position: Int, convertView: View?, parent: ViewGroup): View {
+                    val v = super.getDropDownView(position, convertView, parent)
+                    v.setBackgroundColor(getThemeColor(darkCard, lightCard))
+                    (v as? TextView)?.apply {
+                        setTextColor(getThemeColor(darkText, lightText))
+                        textSize = 14f
+                    }
+                    return v
+                }
+            }
+            this.adapter = adapter
+            
+            val selectionIndex = when(currentDirection) {
+                "bidirectional" -> 0
+                "desktop_to_mobile" -> 1
+                "mobile_to_desktop" -> 2
+                else -> 0
+            }
+            setSelection(selectionIndex)
+        }
+        spinnerContainer.addView(directionSpinner)
+        clipConfigCard.addView(spinnerContainer)
+
+        autoSyncSwitch.setOnCheckedChangeListener { _, isChecked ->
+            val dirIndex = directionSpinner.selectedItemPosition
+            val dirValue = when(dirIndex) {
+                0 -> "bidirectional"
+                1 -> "desktop_to_mobile"
+                2 -> "mobile_to_desktop"
+                else -> "bidirectional"
+            }
+            saveClipboardConfig(dirValue, isChecked)
+        }
+
+        directionSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                val isChecked = autoSyncSwitch.isChecked
+                val dirValue = when(position) {
+                    0 -> "bidirectional"
+                    1 -> "desktop_to_mobile"
+                    2 -> "mobile_to_desktop"
+                    else -> "bidirectional"
+                }
+                saveClipboardConfig(dirValue, isChecked)
+            }
+
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+        clipboardContainer.addView(clipConfigCard)
+
+        // 2. Control Card (Send/Status)
         val clipControlCard = createCardLayout()
         clipboardStatusText = TextView(this).apply {
             text = "Shared Clipboard Text: None"
@@ -409,7 +537,7 @@ class MainActivity : AppCompatActivity() {
             text = title
             textSize = 11f
             setTypeface(null, Typeface.BOLD)
-            setTextColor(if (active) Color.BLACK else getThemeColor(darkText, lightText))
+            setTextColor(if (active) Color.WHITE else getThemeColor(darkText, lightText))
             background = if (active) {
                 getNeobrutalismDrawable(accentColor, getThemeColor(darkBorder, lightBorder), 5)
             } else {
@@ -748,6 +876,41 @@ class MainActivity : AppCompatActivity() {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val clip = ClipData.newPlainText("platypusd-sync", text)
         clipboard.setPrimaryClip(clip)
-        Toast.makeText(this, "Local clipboard synced and sent", Toast.LENGTH_SHORT).show()
+
+        val service = ConnectionService.instance
+        if (service != null) {
+            service.lastSyncedClipboardText = text
+            service.relayClipboardState(text)
+            Toast.makeText(this, "Local clipboard synced and sent to PC", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(this, "Local clipboard synced (Daemon not connected)", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun refreshClipboardUi() {
+        runOnUiThread {
+            if (currentTab == "clipboard") {
+                initLayout()
+            }
+        }
+    }
+
+    private fun saveClipboardConfig(direction: String, autoSync: Boolean) {
+        val sharedPrefs = getSharedPreferences("platypusd_prefs", Context.MODE_PRIVATE)
+        val oldDirection = sharedPrefs.getString("clipboard_direction", "bidirectional")
+        val oldAutoSync = sharedPrefs.getBoolean("clipboard_auto_sync", true)
+
+        if (oldDirection != direction || oldAutoSync != autoSync) {
+            sharedPrefs.edit()
+                .putString("clipboard_direction", direction)
+                .putBoolean("clipboard_auto_sync", autoSync)
+                .apply()
+            
+            ConnectionService.instance?.updateClipboardConfigOnDaemon(direction, autoSync)
+        }
+    }
+
+    companion object {
+        var instance: MainActivity? = null
     }
 }

@@ -15,6 +15,7 @@ pub struct ClipboardService {
     last_clipboard: Arc<Mutex<String>>,
     tx: broadcast::Sender<WsMessage>,
     pub config: Arc<Mutex<ClipboardConfig>>,
+    suppress_broadcast_until: Arc<Mutex<Option<std::time::Instant>>>,
 }
 
 impl ClipboardService {
@@ -26,6 +27,7 @@ impl ClipboardService {
                 direction: "bidirectional".to_string(),
                 auto_sync: true,
             })),
+            suppress_broadcast_until: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -33,6 +35,11 @@ impl ClipboardService {
     pub async fn set_clipboard_text(&self, text: String) -> anyhow::Result<()> {
         info!("Updating host system clipboard with: {}", text);
         
+        {
+            let mut suppress = self.suppress_broadcast_until.lock().await;
+            *suppress = Some(std::time::Instant::now() + std::time::Duration::from_secs(2));
+        }
+
         let mut last = self.last_clipboard.lock().await;
         *last = text.clone();
 
@@ -111,6 +118,7 @@ impl ClipboardService {
             }
 
             let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(1500));
+            let suppress_broadcast_until = self.suppress_broadcast_until.clone();
             loop {
                 interval.tick().await;
 
@@ -130,15 +138,29 @@ impl ClipboardService {
                 }
 
                 let mut last = self.last_clipboard.lock().await;
-                if current != *last {
+                if current.trim() != last.trim() {
                     info!("Host clipboard update detected (length: {}). Syncing to devices.", current.len());
                     *last = current.clone();
 
-                    // Broadcast to websocket clients
-                    let _ = self.tx.send(WsMessage {
-                        event: "ClipboardSynced".to_string(),
-                        data: serde_json::json!({ "text": current }),
-                    });
+                    // Check if broadcast is currently suppressed
+                    let suppressed = {
+                        let suppress = suppress_broadcast_until.lock().await;
+                        if let Some(until) = *suppress {
+                            std::time::Instant::now() < until
+                        } else {
+                            false
+                        }
+                    };
+
+                    if suppressed {
+                        info!("Broadcast suppressed because clipboard update was recently pushed from mobile.");
+                    } else {
+                        // Broadcast to websocket clients
+                        let _ = self.tx.send(WsMessage {
+                            event: "ClipboardSynced".to_string(),
+                            data: serde_json::json!({ "text": current }),
+                        });
+                    }
                 }
             }
         });
