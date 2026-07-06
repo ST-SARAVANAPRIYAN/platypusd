@@ -490,15 +490,23 @@ class MainActivity : AppCompatActivity() {
                 
                 service?.updateBluetoothConfigOnDaemon(modeVal, callSyncVal)
                 if (showToast) {
-                    val toastText = if (modeVal == "desktop_as_speaker") "Role Mode: Desktop as Speaker" else "Role Mode: Mobile as Speaker"
+                    val toastText = if (modeVal == "desktop_as_speaker") "Role Mode: Desktop as Speaker" else "Role Mode: Mobile as Speaker (Wi-Fi Stream)"
                     Toast.makeText(this@MainActivity, "✅ $toastText", Toast.LENGTH_SHORT).show()
                 }
+            }
+
+            val audioStreamToggle = Switch(this).apply {
+                text = "Receive PC Audio Stream (Wi-Fi)"
+                setTextColor(getThemeColor(darkText, lightText))
+                isChecked = (currentMode == "mobile_as_speaker")
+                textSize = 15f
             }
 
             btnDesktop.setOnClickListener {
                 if (selectedMode != "desktop_as_speaker") {
                     selectedMode = "desktop_as_speaker"
                     updateToggleVisuals()
+                    audioStreamToggle.isChecked = false
                     saveConfig(selectedMode, callToggle.isChecked, true)
                 }
             }
@@ -507,6 +515,7 @@ class MainActivity : AppCompatActivity() {
                 if (selectedMode != "mobile_as_speaker") {
                     selectedMode = "mobile_as_speaker"
                     updateToggleVisuals()
+                    audioStreamToggle.isChecked = true
                     saveConfig(selectedMode, callToggle.isChecked, true)
                 }
             }
@@ -522,16 +531,15 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this@MainActivity, if (isChecked) "✅ Call Routing Enabled" else "✅ Call Routing Disabled", Toast.LENGTH_SHORT).show()
             }
 
-            // 3. Receive PC Audio Stream Toggle
-            val audioStreamToggle = Switch(this).apply {
-                text = "Receive PC Audio Stream (Wi-Fi)"
-                setTextColor(getThemeColor(darkText, lightText))
-                isChecked = false
-                textSize = 15f
-            }
             configCard.addView(audioStreamToggle)
 
             audioStreamToggle.setOnCheckedChangeListener { _, isChecked ->
+                val newMode = if (isChecked) "mobile_as_speaker" else "desktop_as_speaker"
+                if (selectedMode != newMode) {
+                    selectedMode = newMode
+                    updateToggleVisuals()
+                    saveConfig(selectedMode, callToggle.isChecked, false)
+                }
                 if (service != null) {
                     if (isChecked) {
                         service.startDesktopAudioStream()

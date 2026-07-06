@@ -347,6 +347,25 @@ class ConnectionService : Service() {
                         scope.launch(Dispatchers.Main) {
                             handleCallActionCommand(action)
                         }
+                    } else if (event == "BluetoothConfigChanged") {
+                        val speakerMode = data.optString("speaker_mode", "desktop_as_speaker")
+                        val callSyncEnabled = data.optBoolean("call_sync_enabled", true)
+                        Log.i(TAG, "Received bluetooth config update from daemon: speakerMode=$speakerMode, callSyncEnabled=$callSyncEnabled")
+                        val sharedPrefs = getSharedPreferences("platypusd_prefs", Context.MODE_PRIVATE)
+                        sharedPrefs.edit()
+                            .putString("bluetooth_speaker_mode", speakerMode)
+                            .putBoolean("bluetooth_call_sync_enabled", callSyncEnabled)
+                            .apply()
+                        
+                        if (speakerMode == "mobile_as_speaker") {
+                            startDesktopAudioStream()
+                        } else {
+                            stopDesktopAudioStream()
+                        }
+                        
+                        scope.launch(Dispatchers.Main) {
+                            MainActivity.instance?.initLayout()
+                        }
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Error parsing WebSocket payload: ${e.message}")

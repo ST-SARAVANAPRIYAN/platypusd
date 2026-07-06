@@ -210,6 +210,9 @@ export default function App() {
             setActiveCall(call.state === 'Disconnected' ? null : call);
           } else if (payload.event === 'ClipboardSynced') {
             setLastClipboard(payload.data.text);
+          } else if (payload.event === 'BluetoothConfigChanged') {
+            setSpeakerMode(payload.data.speaker_mode);
+            setCallSyncEnabled(payload.data.call_sync_enabled);
           } else if (
             payload.event === 'DeviceConnected' ||
             payload.event === 'DeviceDisconnected' ||

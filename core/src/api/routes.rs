@@ -310,6 +310,16 @@ pub async fn set_bluetooth_config(
 ) -> (StatusCode, Json<serde_json::Value>) {
     state.call_service.set_bluetooth_config(payload.speaker_mode.clone(), payload.call_sync_enabled).await;
     info!("Updated bluetooth configuration: speaker_mode={}, call_sync_enabled={}", payload.speaker_mode, payload.call_sync_enabled);
+    
+    // Broadcast config update to all connected devices via WS
+    let _ = state.tx.send(WsMessage {
+        event: "BluetoothConfigChanged".to_string(),
+        data: serde_json::json!({
+            "speaker_mode": payload.speaker_mode.clone(),
+            "call_sync_enabled": payload.call_sync_enabled,
+        }),
+    });
+
     let _ = state.call_service.apply_speaker_mode_routing().await;
     (StatusCode::OK, Json(serde_json::json!({ "success": true })))
 }
