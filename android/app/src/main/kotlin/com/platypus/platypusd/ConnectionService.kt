@@ -312,22 +312,28 @@ class ConnectionService : Service() {
         }
         Log.i(TAG, "Connecting WebSocket to: $urlWithParams")
         val request = Request.Builder().url(urlWithParams).build()
-        activeWebSocket = client.newWebSocket(request, object : WebSocketListener() {
+        val newWS = client.newWebSocket(request, object : WebSocketListener() {
              override fun onOpen(webSocket: WebSocket, response: Response) {
-                isWsConnected = true
-                Log.i(TAG, "WebSocket event connection opened to: $wsUrl")
-                isBluetoothConnectedCached = null // force update
-                getClipboardConfigFromDaemon()
-                getBluetoothConfigFromDaemon()
-                scope.launch {
-                    while (isWsConnected) {
-                        checkBluetoothConnectionToHost()
-                        kotlinx.coroutines.delay(3000)
-                    }
-                }
+                 if (webSocket != activeWebSocket) {
+                     Log.w(TAG, "onOpen received for obsolete WebSocket connection. Closing it.")
+                     webSocket.close(1000, "Obsolete connection")
+                     return
+                 }
+                 isWsConnected = true
+                 Log.i(TAG, "WebSocket event connection opened to: $wsUrl")
+                 isBluetoothConnectedCached = null // force update
+                 getClipboardConfigFromDaemon()
+                 getBluetoothConfigFromDaemon()
+                 scope.launch {
+                     while (isWsConnected && webSocket == activeWebSocket) {
+                         checkBluetoothConnectionToHost()
+                         kotlinx.coroutines.delay(3000)
+                     }
+                 }
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                if (webSocket != activeWebSocket) return
                 try {
                     val json = JSONObject(text)
                     val event = json.optString("event")
@@ -373,11 +379,13 @@ class ConnectionService : Service() {
             }
 
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                if (webSocket != activeWebSocket) return
                 val buffer = bytes.toByteArray()
                 audioTrack?.write(buffer, 0, buffer.size)
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                if (webSocket != activeWebSocket) return
                 isWsConnected = false
                 releaseAudioTrack()
                 Log.w(TAG, "WebSocket connection closed: $reason. Retrying in 5 seconds...")
@@ -387,6 +395,7 @@ class ConnectionService : Service() {
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                if (webSocket != activeWebSocket) return
                 isWsConnected = false
                 releaseAudioTrack()
                 Log.e(TAG, "WebSocket error: ${t.message}. Retrying in 5 seconds...")
@@ -395,6 +404,7 @@ class ConnectionService : Service() {
                 }
             }
         })
+        activeWebSocket = newWS
     }
 
     private suspend fun delayReconnect() {
