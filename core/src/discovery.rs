@@ -83,7 +83,7 @@ impl DiscoveryManager {
 }
 
 /// Retrieve the primary outbound IP address of the local system
-fn get_local_ip() -> Result<std::net::IpAddr> {
+pub fn get_local_ip() -> Result<std::net::IpAddr> {
     let socket = UdpSocket::bind("0.0.0.0:0")?;
     socket.connect("8.8.8.8:80")?;
     Ok(socket.local_addr()?.ip())

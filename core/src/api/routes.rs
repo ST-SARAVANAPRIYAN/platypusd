@@ -17,6 +17,7 @@ pub struct StatusResponse {
     pub public_key: String,
     pub paired_devices: Vec<PairedDeviceDto>,
     pub active_call: Option<ActiveCall>,
+    pub daemon_ip: String,
 }
 
 #[derive(Serialize)]
@@ -40,6 +41,9 @@ pub async fn get_status(State(state): State<AppState>) -> Json<StatusResponse> {
         .collect();
 
     let active_call = state.call_service.get_active_call().await;
+    let local_ip = crate::discovery::get_local_ip()
+        .map(|ip| ip.to_string())
+        .unwrap_or_else(|_| "127.0.0.1".to_string());
 
     Json(StatusResponse {
         status: "online".to_string(),
@@ -49,6 +53,7 @@ pub async fn get_status(State(state): State<AppState>) -> Json<StatusResponse> {
         public_key: state.identity.public_key.clone(),
         paired_devices: paired_dtos,
         active_call,
+        daemon_ip: local_ip,
     })
 }
 

@@ -23,6 +23,7 @@ interface StatusData {
   public_key: string;
   paired_devices: PairedDevice[];
   active_call: ActiveCall | null;
+  daemon_ip: string;
 }
 
 export default function App() {
@@ -168,9 +169,9 @@ export default function App() {
 
   useEffect(() => {
     if (status) {
-      const hostIp = window.location.hostname || '192.168.1.112';
+      const hostIp = status.daemon_ip || '192.168.1.112';
       const connectionInfo = {
-        ip: hostIp === 'localhost' || hostIp === '127.0.0.1' ? '192.168.1.112' : hostIp,
+        ip: hostIp,
         port: 8080,
         id: status.device_id,
         name: status.device_name,
