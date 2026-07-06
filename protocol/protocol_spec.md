@@ -120,3 +120,51 @@ Equivalent to the REST call action.
   }
 }
 ```
+
+#### `StartDesktopAudio`
+Request the daemon to start capturing system audio output and stream it over WebSocket as binary payloads.
+```json
+{
+  "command": "StartDesktopAudio"
+}
+```
+
+#### `StopDesktopAudio`
+Request the daemon to stop capturing system audio output.
+```json
+{
+  "command": "StopDesktopAudio"
+}
+```
+
+---
+
+## 4. Bluetooth Configuration API
+
+Exposed by `platypusd-core` daemon to sync configuration options.
+
+### GET `/api/v1/bluetooth/config`
+Retrieve the current bluetooth audio routing role and call mirror configuration.
+- **Response**:
+  ```json
+  {
+    "speaker_mode": "desktop_as_speaker | mobile_as_speaker",
+    "call_sync_enabled": true
+  }
+  ```
+
+### POST `/api/v1/bluetooth/config`
+Update the bluetooth speaker role and call mirroring settings.
+- **Request**:
+  ```json
+  {
+    "speaker_mode": "desktop_as_speaker | mobile_as_speaker",
+    "call_sync_enabled": true
+  }
+  ```
+- **Response**:
+  ```json
+  {
+    "success": true
+  }
+  ```

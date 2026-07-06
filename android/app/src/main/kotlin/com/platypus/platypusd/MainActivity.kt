@@ -130,7 +130,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun initLayout() {
+    fun initLayout() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             window.statusBarColor = getThemeColor(darkBg, lightBg)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -195,7 +195,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         devicesTabBtn = createTabButton("Devices", currentTab == "devices") { switchTab("devices") }
-        callsTabBtn = createTabButton("Call Sync", currentTab == "calls") { switchTab("calls") }
+        callsTabBtn = createTabButton("Bluetooth", currentTab == "calls") { switchTab("calls") }
         clipboardTabBtn = createTabButton("Clipboard", currentTab == "clipboard") { switchTab("clipboard") }
 
         tabContainer.addView(devicesTabBtn)
@@ -338,65 +338,184 @@ class MainActivity : AppCompatActivity() {
 
         contentLayout.addView(devicesContainer)
 
-        // ================= TAB 2: CALL SYNC =================
+        // ================= TAB 2: BLUETOOTH CONNECTIVITY =================
         callsContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             visibility = if (currentTab == "calls") View.VISIBLE else View.GONE
         }
 
-        val callControlCard = createCardLayout()
-        val callTitleText = TextView(this).apply {
-            text = "Phone Call Synchronization"
-            textSize = 18f
-            setTextColor(getThemeColor(darkText, lightText))
-            setTypeface(null, Typeface.BOLD)
-            setPadding(0, 0, 0, 15)
-        }
-        callControlCard.addView(callTitleText)
+        val service = ConnectionService.instance
+        val isBluetoothConnected = service?.isBluetoothConnectedToHost ?: false
+        val connectedDeviceName = service?.connectedBluetoothDeviceName ?: ""
 
-        val callDescText = TextView(this).apply {
-            text = "Relays live phone call alerts (Ringing, Connected, Muted) automatically to the desktop host when active."
-            textSize = 14f
-            setTextColor(getThemeColor(darkTextMuted, lightTextMuted))
-            setPadding(0, 0, 0, 30)
-        }
-        callControlCard.addView(callDescText)
+        if (!isBluetoothConnected) {
+            val disconnectedCard = createCardLayout()
+            val warnTitle = TextView(this).apply {
+                text = "Bluetooth Connectivity"
+                textSize = 18f
+                setTextColor(getThemeColor(darkText, lightText))
+                setTypeface(null, Typeface.BOLD)
+                setPadding(0, 0, 0, 15)
+            }
+            disconnectedCard.addView(warnTitle)
 
-        val callToggle = Switch(this).apply {
-            text = "Enable Call State Mirroring"
-            setTextColor(getThemeColor(darkText, lightText))
-            isChecked = true
-            textSize = 15f
-        }
-        callControlCard.addView(callToggle)
-        callsContainer.addView(callControlCard)
+            val warnDesc = TextView(this).apply {
+                text = "⚠️ Bluetooth Devices Not Connected.\n\nPlease pair and connect your mobile phone and PC in system Bluetooth settings to access Call Audio Routing and PC Speaker configuration."
+                textSize = 14f
+                setTextColor(getThemeColor(darkTextMuted, lightTextMuted))
+                setPadding(0, 0, 0, 30)
+            }
+            disconnectedCard.addView(warnDesc)
 
-        // 2. Desktop Audio Receiver Card
-        val audioReceiverCard = createCardLayout()
-        val audioTitleText = TextView(this).apply {
-            text = "Desktop Audio Receiver"
-            textSize = 18f
-            setTextColor(getThemeColor(darkText, lightText))
-            setTypeface(null, Typeface.BOLD)
-            setPadding(0, 0, 0, 15)
-        }
-        audioReceiverCard.addView(audioTitleText)
+            val openSettingsBtn = Button(this).apply {
+                text = "Open Bluetooth Settings"
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(getThemeColor(darkText, lightText))
+                background = getNeobrutalismDrawable(getThemeColor(darkCard, lightCard), getThemeColor(darkBorder, lightBorder), 5)
+                setOnClickListener {
+                    try {
+                        val intent = Intent(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS).apply {
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                        }
+                        startActivity(intent)
+                    } catch (e: Exception) {
+                        Toast.makeText(this@MainActivity, "Could not open Bluetooth settings", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+            disconnectedCard.addView(openSettingsBtn)
+            callsContainer.addView(disconnectedCard)
+        } else {
+            // Bluetooth Connected UI
+            val statusCard = createCardLayout()
+            val statusTitle = TextView(this).apply {
+                text = "Bluetooth Status"
+                textSize = 16f
+                setTextColor(getThemeColor(darkText, lightText))
+                setTypeface(null, Typeface.BOLD)
+                setPadding(0, 0, 0, 10)
+            }
+            statusCard.addView(statusTitle)
 
-        val audioDescText = TextView(this).apply {
-            text = "Stream your computer's audio output directly to this mobile device in real-time."
-            textSize = 14f
-            setTextColor(getThemeColor(darkTextMuted, lightTextMuted))
-            setPadding(0, 0, 0, 30)
-        }
-        audioReceiverCard.addView(audioDescText)
+            val statusText = TextView(this).apply {
+                text = "✅ Connected to Host via Bluetooth\nDevice: $connectedDeviceName"
+                textSize = 14f
+                setTextColor(successColor)
+                setTypeface(null, Typeface.BOLD)
+                setPadding(0, 0, 0, 10)
+            }
+            statusCard.addView(statusText)
+            callsContainer.addView(statusCard)
 
-        val audioStreamToggle = Switch(this).apply {
-            text = "Receive PC Audio Stream"
-            setTextColor(getThemeColor(darkText, lightText))
-            isChecked = false
-            textSize = 15f
-            setOnCheckedChangeListener { _, isChecked ->
-                val service = ConnectionService.instance
+            // Configurations Card
+            val configCard = createCardLayout()
+            val configTitle = TextView(this).apply {
+                text = "Bluetooth Audio & Call Options"
+                textSize = 18f
+                setTextColor(getThemeColor(darkText, lightText))
+                setTypeface(null, Typeface.BOLD)
+                setPadding(0, 0, 0, 15)
+            }
+            configCard.addView(configTitle)
+
+            val sharedPrefs = getSharedPreferences("platypusd_prefs", Context.MODE_PRIVATE)
+            val currentMode = sharedPrefs.getString("bluetooth_speaker_mode", "desktop_as_speaker") ?: "desktop_as_speaker"
+            val currentCallSync = sharedPrefs.getBoolean("bluetooth_call_sync_enabled", true)
+
+            // 1. Speaker Mode Config
+            val modeLabel = TextView(this).apply {
+                text = "Audio Role Mode:"
+                textSize = 13f
+                setTextColor(getThemeColor(darkText, lightText))
+                setTypeface(null, Typeface.BOLD)
+                setPadding(0, 10, 0, 10)
+            }
+            configCard.addView(modeLabel)
+
+            val spinnerContainer = FrameLayout(this).apply {
+                background = getNeobrutalismDrawable(getThemeColor(darkCard, lightCard), getThemeColor(darkBorder, lightBorder), 5)
+                setPadding(10, 5, 10, 5)
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                    bottomMargin = 20
+                }
+            }
+
+            val modeSpinner = Spinner(this).apply {
+                val options = arrayOf("Desktop as Speaker (PC plays phone audio)", "Mobile as Speaker (Phone plays PC audio)")
+                val adapter = object : ArrayAdapter<String>(this@MainActivity, android.R.layout.simple_spinner_item, options) {
+                    override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+                        val v = super.getView(position, convertView, parent)
+                        (v as? TextView)?.apply {
+                            setTextColor(getThemeColor(darkText, lightText))
+                            textSize = 14f
+                            setTypeface(null, Typeface.BOLD)
+                        }
+                        return v
+                    }
+
+                    override fun getDropDownView(position: Int, convertView: View?, parent: ViewGroup): View {
+                        val v = super.getDropDownView(position, convertView, parent)
+                        v.setBackgroundColor(getThemeColor(darkCard, lightCard))
+                        (v as? TextView)?.apply {
+                            setTextColor(getThemeColor(darkText, lightText))
+                            textSize = 14f
+                        }
+                        return v
+                    }
+                }
+                this.adapter = adapter
+                
+                val selectionIndex = if (currentMode == "desktop_as_speaker") 0 else 1
+                setSelection(selectionIndex)
+            }
+            spinnerContainer.addView(modeSpinner)
+            configCard.addView(spinnerContainer)
+
+            // 2. Call Sync Toggle
+            val callToggle = Switch(this).apply {
+                text = "Enable Call Audio Routing"
+                setTextColor(getThemeColor(darkText, lightText))
+                isChecked = currentCallSync
+                textSize = 15f
+                setPadding(0, 0, 0, 20)
+            }
+            configCard.addView(callToggle)
+
+            // 3. Receive PC Audio Stream Toggle
+            val audioStreamToggle = Switch(this).apply {
+                text = "Receive PC Audio Stream (Wi-Fi)"
+                setTextColor(getThemeColor(darkText, lightText))
+                isChecked = false
+                textSize = 15f
+            }
+            configCard.addView(audioStreamToggle)
+
+            // Save listeners
+            val saveConfig = {
+                val modeIndex = modeSpinner.selectedItemPosition
+                val modeVal = if (modeIndex == 0) "desktop_as_speaker" else "mobile_as_speaker"
+                val callSyncVal = callToggle.isChecked
+                
+                sharedPrefs.edit()
+                    .putString("bluetooth_speaker_mode", modeVal)
+                    .putBoolean("bluetooth_call_sync_enabled", callSyncVal)
+                    .apply()
+                
+                service?.updateBluetoothConfigOnDaemon(modeVal, callSyncVal)
+            }
+
+            modeSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                    saveConfig()
+                }
+                override fun onNothingSelected(parent: AdapterView<*>?) {}
+            }
+
+            callToggle.setOnCheckedChangeListener { _, _ ->
+                saveConfig()
+            }
+
+            audioStreamToggle.setOnCheckedChangeListener { _, isChecked ->
                 if (service != null) {
                     if (isChecked) {
                         service.startDesktopAudioStream()
@@ -405,14 +524,11 @@ class MainActivity : AppCompatActivity() {
                         service.stopDesktopAudioStream()
                         Toast.makeText(this@MainActivity, "Desktop audio stream stopped", Toast.LENGTH_SHORT).show()
                     }
-                } else {
-                    Toast.makeText(this@MainActivity, "Service is not connected", Toast.LENGTH_SHORT).show()
-                    this.isChecked = false
                 }
             }
+
+            callsContainer.addView(configCard)
         }
-        audioReceiverCard.addView(audioStreamToggle)
-        callsContainer.addView(audioReceiverCard)
 
         contentLayout.addView(callsContainer)
 

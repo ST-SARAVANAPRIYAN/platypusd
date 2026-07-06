@@ -93,6 +93,11 @@ class ConnectionService : Service() {
     val connectedHost: String
         get() = daemonHost
 
+    val isBluetoothConnectedToHost: Boolean
+        get() = isBluetoothConnectedCached ?: false
+
+    var connectedBluetoothDeviceName: String = ""
+
     fun disconnect() {
         activeWebSocket?.close(1000, "User requested disconnect")
         isWsConnected = false
@@ -313,6 +318,7 @@ class ConnectionService : Service() {
                 Log.i(TAG, "WebSocket event connection opened to: $wsUrl")
                 isBluetoothConnectedCached = null // force update
                 getClipboardConfigFromDaemon()
+                getBluetoothConfigFromDaemon()
                 scope.launch {
                     while (isWsConnected) {
                         checkBluetoothConnectionToHost()
@@ -569,6 +575,71 @@ class ConnectionService : Service() {
         }
     }
 
+    fun getBluetoothConfigFromDaemon() {
+        if (!isWsConnected) return
+        scope.launch {
+            try {
+                val request = Request.Builder()
+                    .url("$daemonUrl/api/v1/bluetooth/config")
+                    .get()
+                    .build()
+
+                client.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        val bodyStr = response.body?.string() ?: ""
+                        Log.i(TAG, "Fetched bluetooth config: $bodyStr")
+                        val json = JSONObject(bodyStr)
+                        val speakerMode = json.optString("speaker_mode", "desktop_as_speaker")
+                        val callSyncEnabled = json.optBoolean("call_sync_enabled", true)
+
+                        val sharedPrefs = getSharedPreferences("platypusd_prefs", Context.MODE_PRIVATE)
+                        sharedPrefs.edit()
+                            .putString("bluetooth_speaker_mode", speakerMode)
+                            .putBoolean("bluetooth_call_sync_enabled", callSyncEnabled)
+                            .apply()
+
+                        // Trigger UI update if MainActivity is active
+                        scope.launch(Dispatchers.Main) {
+                            MainActivity.instance?.let { activity ->
+                                activity.initLayout()
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error fetching bluetooth config: ${e.message}")
+            }
+        }
+    }
+
+    fun updateBluetoothConfigOnDaemon(speakerMode: String, callSyncEnabled: Boolean) {
+        if (!isWsConnected) return
+        scope.launch {
+            try {
+                val json = JSONObject().apply {
+                    put("speaker_mode", speakerMode)
+                    put("call_sync_enabled", callSyncEnabled)
+                }
+                val mediaType = "application/json; charset=utf-8".toMediaType()
+                val body = json.toString().toRequestBody(mediaType)
+                val request = Request.Builder()
+                    .url("$daemonUrl/api/v1/bluetooth/config")
+                    .post(body)
+                    .build()
+
+                client.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        Log.i(TAG, "Successfully updated bluetooth config on daemon.")
+                    } else {
+                        Log.e(TAG, "Failed to update bluetooth config: ${response.code}")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error updating bluetooth config on daemon: ${e.message}")
+            }
+        }
+    }
+
     private fun handleCallActionCommand(action: String) {
         val telecomManager = getSystemService(Context.TELECOM_SERVICE) as? android.telecom.TelecomManager
         if (telecomManager == null) {
@@ -662,10 +733,16 @@ class ConnectionService : Service() {
             }
         }
 
+        connectedBluetoothDeviceName = activeName
         if (isBluetoothConnectedCached != currentStatus) {
             isBluetoothConnectedCached = currentStatus
             Log.i(TAG, "Bluetooth connection status to host changed: $currentStatus. Sending to backend.")
             sendBluetoothStatus(currentStatus, activeMac, activeName)
+            MainActivity.instance?.let { activity ->
+                activity.runOnUiThread {
+                    activity.initLayout()
+                }
+            }
         }
     }
 

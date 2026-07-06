@@ -25,6 +25,8 @@ pub struct CallService {
     loaded_modules: Arc<Mutex<Vec<String>>>,
     bluetooth_mac: Arc<Mutex<Option<String>>>,
     original_bluetooth_profile: Arc<Mutex<Option<String>>>,
+    speaker_mode: Arc<Mutex<String>>, // "desktop_as_speaker" or "mobile_as_speaker"
+    call_sync_enabled: Arc<Mutex<bool>>,
 }
 
 impl CallService {
@@ -34,7 +36,24 @@ impl CallService {
             loaded_modules: Arc::new(Mutex::new(Vec::new())),
             bluetooth_mac: Arc::new(Mutex::new(None)),
             original_bluetooth_profile: Arc::new(Mutex::new(None)),
+            speaker_mode: Arc::new(Mutex::new("desktop_as_speaker".to_string())),
+            call_sync_enabled: Arc::new(Mutex::new(true)),
         }
+    }
+
+    pub async fn set_bluetooth_config(&self, speaker_mode: String, call_sync_enabled: bool) {
+        let mut mode = self.speaker_mode.lock().await;
+        *mode = speaker_mode;
+        let mut enabled = self.call_sync_enabled.lock().await;
+        *enabled = call_sync_enabled;
+    }
+
+    pub async fn get_speaker_mode(&self) -> String {
+        self.speaker_mode.lock().await.clone()
+    }
+
+    pub async fn is_call_sync_enabled(&self) -> bool {
+        *self.call_sync_enabled.lock().await
     }
 
     pub async fn set_bluetooth_mac(&self, mac: Option<String>) {
@@ -149,6 +168,7 @@ impl CallService {
         let loaded_modules = self.loaded_modules.clone();
         let bluetooth_mac = self.bluetooth_mac.clone();
         let original_bluetooth_profile = self.original_bluetooth_profile.clone();
+        let speaker_mode = self.speaker_mode.clone();
         
         // Spawn background task to wait for SCO channels (Bluetooth source/sink) to be created by Pipewire
         tokio::spawn(async move {
@@ -227,17 +247,41 @@ impl CallService {
                     let _ = Command::new("pactl").args(&["set-sink-mute", &phys_sink, "0"]).output().await;
                     let _ = Command::new("pactl").args(&["set-sink-volume", &phys_sink, "100%"]).output().await;
 
-                    // Loop 1: Phone MIC (bluez source) -> PC Speakers (resolved physical sink)
-                    let mod1 = Command::new("pactl")
-                        .args(&["load-module", "module-loopback", &format!("source={}", b_source), &format!("sink={}", phys_sink), "latency_msec=120"])
-                        .output()
-                        .await;
+                    // Resolve speaker mode
+                    let mode = {
+                        let m = speaker_mode.lock().await;
+                        m.clone()
+                    };
+                    info!("Active bluetooth speaker mode: {}", mode);
+
+                    let (mod1, mod2) = if mode == "desktop_as_speaker" {
+                        // Desktop as speaker to mobile
+                        // Loop 1: Phone MIC (bluez source) -> PC Speakers (resolved physical sink)
+                        let m1 = Command::new("pactl")
+                            .args(&["load-module", "module-loopback", &format!("source={}", b_source), &format!("sink={}", phys_sink), "latency_msec=120"])
+                            .output()
+                            .await;
                         
-                    // Loop 2: PC MIC (resolved physical source) -> Phone Speaker (bluez sink)
-                    let mod2 = Command::new("pactl")
-                        .args(&["load-module", "module-loopback", &format!("source={}", phys_source), &format!("sink={}", b_sink), "latency_msec=120"])
-                        .output()
-                        .await;
+                        // Loop 2: PC MIC (resolved physical source) -> Phone Speaker (bluez sink)
+                        let m2 = Command::new("pactl")
+                            .args(&["load-module", "module-loopback", &format!("source={}", phys_source), &format!("sink={}", b_sink), "latency_msec=120"])
+                            .output()
+                            .await;
+                            
+                        (m1, m2)
+                    } else {
+                        // Mobile as speaker to desktop
+                        // Loop 1: PC Speakers Output (phys_sink.monitor) -> Phone Speaker (bluez sink)
+                        let m1 = Command::new("pactl")
+                            .args(&["load-module", "module-loopback", &format!("source={}.monitor", phys_sink), &format!("sink={}", b_sink), "latency_msec=120"])
+                            .output()
+                            .await;
+                            
+                        // Loop 2: No-op
+                        let m2 = Command::new("true").output().await;
+                        
+                        (m1, m2)
+                    };
                         
                     let mut modules = loaded_modules.lock().await;
                     if let Ok(m1_out) = mod1 {

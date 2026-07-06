@@ -287,6 +287,32 @@ pub async fn set_clipboard_config(
     (StatusCode::OK, Json(serde_json::json!({ "success": true })))
 }
 
+#[derive(Deserialize, Serialize, Clone)]
+pub struct BluetoothConfigDto {
+    pub speaker_mode: String,
+    pub call_sync_enabled: bool,
+}
+
+pub async fn get_bluetooth_config(
+    State(state): State<AppState>,
+) -> Json<BluetoothConfigDto> {
+    let mode = state.call_service.get_speaker_mode().await;
+    let enabled = state.call_service.is_call_sync_enabled().await;
+    Json(BluetoothConfigDto {
+        speaker_mode: mode,
+        call_sync_enabled: enabled,
+    })
+}
+
+pub async fn set_bluetooth_config(
+    State(state): State<AppState>,
+    Json(payload): Json<BluetoothConfigDto>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    state.call_service.set_bluetooth_config(payload.speaker_mode.clone(), payload.call_sync_enabled).await;
+    info!("Updated bluetooth configuration: speaker_mode={}, call_sync_enabled={}", payload.speaker_mode, payload.call_sync_enabled);
+    (StatusCode::OK, Json(serde_json::json!({ "success": true })))
+}
+
 #[derive(Deserialize)]
 pub struct BluetoothDisconnectRequest {
     pub device_id: String,

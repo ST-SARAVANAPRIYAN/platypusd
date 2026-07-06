@@ -11,7 +11,7 @@ Unlike traditional desktop applications (like KDE Connect), **platypusd** is bui
 *   **API-First Core**: Fully scriptable REST and WebSockets interfaces.
 *   **Local-First & Secure**: Mutual authentication using persistent Ed25519 keypairs. No cloud services or user accounts.
 *   **Local Discovery**: Discovers devices on the local area network using mDNS.
-*   **Phone Call Integration (Phase 1)**: Receive real-time call states, toggle microphone mute/unmute, and control desktop audio routing loopbacks automatically.
+*   **Bluetooth Audio & Call Integration (Phase 1)**: Flexibly route call and system audio depending on the device's role. Supports two modes: Desktop acting as a speaker/mic for Mobile, or Mobile acting as a real-time wireless speaker/mic for Desktop.
 
 ---
 

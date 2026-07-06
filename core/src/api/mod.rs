@@ -45,6 +45,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/v1/calls/state", post(routes::update_call_state))
         .route("/api/v1/clipboard", post(routes::update_clipboard))
         .route("/api/v1/clipboard/config", get(routes::get_clipboard_config).post(routes::set_clipboard_config))
+        .route("/api/v1/bluetooth/config", get(routes::get_bluetooth_config).post(routes::set_bluetooth_config))
         .route("/api/v1/bluetooth/open-settings", post(routes::open_bluetooth_settings_route))
         .route("/api/v1/bluetooth/disconnect", post(routes::disconnect_bluetooth_device_route))
         .route("/api/v1/events", get(ws::ws_handler))
