@@ -370,6 +370,50 @@ class MainActivity : AppCompatActivity() {
         }
         callControlCard.addView(callToggle)
         callsContainer.addView(callControlCard)
+
+        // 2. Desktop Audio Receiver Card
+        val audioReceiverCard = createCardLayout()
+        val audioTitleText = TextView(this).apply {
+            text = "Desktop Audio Receiver"
+            textSize = 18f
+            setTextColor(getThemeColor(darkText, lightText))
+            setTypeface(null, Typeface.BOLD)
+            setPadding(0, 0, 0, 15)
+        }
+        audioReceiverCard.addView(audioTitleText)
+
+        val audioDescText = TextView(this).apply {
+            text = "Stream your computer's audio output directly to this mobile device in real-time."
+            textSize = 14f
+            setTextColor(getThemeColor(darkTextMuted, lightTextMuted))
+            setPadding(0, 0, 0, 30)
+        }
+        audioReceiverCard.addView(audioDescText)
+
+        val audioStreamToggle = Switch(this).apply {
+            text = "Receive PC Audio Stream"
+            setTextColor(getThemeColor(darkText, lightText))
+            isChecked = false
+            textSize = 15f
+            setOnCheckedChangeListener { _, isChecked ->
+                val service = ConnectionService.instance
+                if (service != null) {
+                    if (isChecked) {
+                        service.startDesktopAudioStream()
+                        Toast.makeText(this@MainActivity, "Desktop audio stream started", Toast.LENGTH_SHORT).show()
+                    } else {
+                        service.stopDesktopAudioStream()
+                        Toast.makeText(this@MainActivity, "Desktop audio stream stopped", Toast.LENGTH_SHORT).show()
+                    }
+                } else {
+                    Toast.makeText(this@MainActivity, "Service is not connected", Toast.LENGTH_SHORT).show()
+                    this.isChecked = false
+                }
+            }
+        }
+        audioReceiverCard.addView(audioStreamToggle)
+        callsContainer.addView(audioReceiverCard)
+
         contentLayout.addView(callsContainer)
 
         // ================= TAB 3: CLIPBOARD =================

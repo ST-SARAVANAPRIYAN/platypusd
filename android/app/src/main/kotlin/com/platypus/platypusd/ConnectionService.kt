@@ -8,6 +8,9 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.media.AudioFormat
+import android.media.AudioManager
+import android.media.AudioTrack
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.os.Build
@@ -24,6 +27,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okhttp3.Response
+import okio.ByteString
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
@@ -74,6 +78,7 @@ class ConnectionService : Service() {
 
     private lateinit var clipboardManager: ClipboardManager
     var lastSyncedClipboardText = ""
+    private var audioTrack: AudioTrack? = null
 
     private val nsdManager by lazy { getSystemService(Context.NSD_SERVICE) as NsdManager }
     private var discoveryListener: NsdManager.DiscoveryListener? = null
@@ -342,8 +347,14 @@ class ConnectionService : Service() {
                 }
             }
 
+            override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                val buffer = bytes.toByteArray()
+                audioTrack?.write(buffer, 0, buffer.size)
+            }
+
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 isWsConnected = false
+                releaseAudioTrack()
                 Log.w(TAG, "WebSocket connection closed: $reason. Retrying in 5 seconds...")
                 scope.launch {
                     delayReconnect()
@@ -352,6 +363,7 @@ class ConnectionService : Service() {
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 isWsConnected = false
+                releaseAudioTrack()
                 Log.e(TAG, "WebSocket error: ${t.message}. Retrying in 5 seconds...")
                 scope.launch {
                     delayReconnect()
@@ -364,6 +376,65 @@ class ConnectionService : Service() {
         kotlinx.coroutines.delay(5000)
         scope.launch(Dispatchers.Main) {
             connectWebSocket()
+        }
+    }
+
+    /* ---------------- Desktop Audio Streaming ---------------- */
+    private fun initAudioTrack() {
+        if (audioTrack != null) return
+        val sampleRate = 44100
+        val channelConfig = AudioFormat.CHANNEL_OUT_STEREO
+        val audioFormat = AudioFormat.ENCODING_PCM_16BIT
+        val minBufSize = AudioTrack.getMinBufferSize(sampleRate, channelConfig, audioFormat)
+
+        try {
+            audioTrack = AudioTrack(
+                AudioManager.STREAM_MUSIC,
+                sampleRate,
+                channelConfig,
+                audioFormat,
+                minBufSize.coerceAtLeast(8192),
+                AudioTrack.MODE_STREAM
+            )
+            audioTrack?.play()
+            Log.i(TAG, "AudioTrack initialized successfully.")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to initialize AudioTrack", e)
+        }
+    }
+
+    private fun releaseAudioTrack() {
+        try {
+            audioTrack?.stop()
+            audioTrack?.release()
+        } catch (e: Exception) {
+            // ignore
+        }
+        audioTrack = null
+        Log.i(TAG, "AudioTrack released.")
+    }
+
+    fun startDesktopAudioStream() {
+        if (!isWsConnected) return
+        scope.launch {
+            val json = JSONObject().apply {
+                put("command", "StartDesktopAudio")
+            }
+            initAudioTrack()
+            activeWebSocket?.send(json.toString())
+            Log.i(TAG, "Sent StartDesktopAudio command to daemon")
+        }
+    }
+
+    fun stopDesktopAudioStream() {
+        if (!isWsConnected) return
+        scope.launch {
+            val json = JSONObject().apply {
+                put("command", "StopDesktopAudio")
+            }
+            activeWebSocket?.send(json.toString())
+            releaseAudioTrack()
+            Log.i(TAG, "Sent StopDesktopAudio command to daemon")
         }
     }
 

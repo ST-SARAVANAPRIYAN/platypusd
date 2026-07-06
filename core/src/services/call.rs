@@ -223,19 +223,19 @@ impl CallService {
 
                     // Ensure physical source & sink are unmuted and set volume
                     let _ = Command::new("pactl").args(&["set-source-mute", &phys_source, "0"]).output().await;
-                    let _ = Command::new("pactl").args(&["set-source-volume", &phys_source, "100%"]).output().await;
+                    let _ = Command::new("pactl").args(&["set-source-volume", &phys_source, "80%"]).output().await;
                     let _ = Command::new("pactl").args(&["set-sink-mute", &phys_sink, "0"]).output().await;
                     let _ = Command::new("pactl").args(&["set-sink-volume", &phys_sink, "100%"]).output().await;
 
                     // Loop 1: Phone MIC (bluez source) -> PC Speakers (resolved physical sink)
                     let mod1 = Command::new("pactl")
-                        .args(&["load-module", "module-loopback", &format!("source={}", b_source), &format!("sink={}", phys_sink), "latency_msec=60"])
+                        .args(&["load-module", "module-loopback", &format!("source={}", b_source), &format!("sink={}", phys_sink), "latency_msec=120"])
                         .output()
                         .await;
                         
                     // Loop 2: PC MIC (resolved physical source) -> Phone Speaker (bluez sink)
                     let mod2 = Command::new("pactl")
-                        .args(&["load-module", "module-loopback", &format!("source={}", phys_source), &format!("sink={}", b_sink), "latency_msec=60"])
+                        .args(&["load-module", "module-loopback", &format!("source={}", phys_source), &format!("sink={}", b_sink), "latency_msec=120"])
                         .output()
                         .await;
                         

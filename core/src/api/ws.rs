@@ -43,23 +43,32 @@ async fn handle_socket(socket: WebSocket, device_id: Option<String>, state: AppS
         }
     }
 
+    let (local_tx, mut local_rx) = tokio::sync::mpsc::channel::<Message>(100);
+
     // Spawn a task to forward events from the broadcast channel to the WebSocket sender
     let dev_id_clone = dev_id.clone();
     let mut send_task = tokio::spawn(async move {
-        while let Ok(msg) = rx.recv().await {
-            // If the device was unpaired, terminate its WebSocket connection immediately!
-            if msg.event == "DeviceUnpaired" {
-                if let Some(target_id) = msg.data.get("device_id").and_then(|id| id.as_str()) {
-                    if target_id == dev_id_clone {
-                        warn!("Device {} was unpaired. Terminating WebSocket connection.", dev_id_clone);
+        loop {
+            tokio::select! {
+                Ok(msg) = rx.recv() => {
+                    if msg.event == "DeviceUnpaired" {
+                        if let Some(target_id) = msg.data.get("device_id").and_then(|id| id.as_str()) {
+                            if target_id == dev_id_clone {
+                                warn!("Device {} was unpaired. Terminating WebSocket connection.", dev_id_clone);
+                                break;
+                            }
+                        }
+                    }
+                    let serialized = serde_json::to_string(&msg).unwrap_or_default();
+                    if sender.send(Message::Text(serialized)).await.is_err() {
                         break;
                     }
                 }
-            }
-
-            let serialized = serde_json::to_string(&msg).unwrap_or_default();
-            if sender.send(Message::Text(serialized)).await.is_err() {
-                break; // Client disconnected
+                Some(msg) = local_rx.recv() => {
+                    if sender.send(msg).await.is_err() {
+                        break;
+                    }
+                }
             }
         }
     });
@@ -67,6 +76,9 @@ async fn handle_socket(socket: WebSocket, device_id: Option<String>, state: AppS
     // Spawn a task to read from the WebSocket receiver and handle incoming commands
     let state_clone = state.clone();
     let mut recv_task = tokio::spawn(async move {
+        let mut audio_child: Option<tokio::process::Child> = None;
+        let mut audio_task: Option<tokio::task::JoinHandle<()>> = None;
+
         while let Some(Ok(msg)) = receiver.next().await {
             if let Message::Text(text) = msg {
                 // Parse commands sent by client if any (e.g. TriggerCallAction)
@@ -113,10 +125,75 @@ async fn handle_socket(socket: WebSocket, device_id: Option<String>, state: AppS
                                     });
                                 }
                             }
+                        } else if cmd == "StartDesktopAudio" {
+                            info!("StartDesktopAudio command received. Initiating capture...");
+                            if let Some(mut child) = audio_child.take() {
+                                let _ = child.kill().await;
+                            }
+                            if let Some(task) = audio_task.take() {
+                                task.abort();
+                            }
+
+                            let default_sink = get_default_sink().await;
+                            let device = if default_sink == "@DEFAULT_SINK@" {
+                                default_sink
+                            } else {
+                                format!("{}.monitor", default_sink)
+                            };
+
+                            info!("Spawning parec for monitor device: {}", device);
+                            let child = tokio::process::Command::new("parec")
+                                .args(&[
+                                    "--device", &device,
+                                    "--format=s16le",
+                                    "--channels=2",
+                                    "--rate=44100",
+                                ])
+                                .stdout(std::process::Stdio::piped())
+                                .spawn();
+
+                            if let Ok(mut c) = child {
+                                if let Some(mut stdout) = c.stdout.take() {
+                                    let local_tx_clone = local_tx.clone();
+                                    let capture_task = tokio::spawn(async move {
+                                        use tokio::io::AsyncReadExt;
+                                        let mut buffer = vec![0u8; 4096];
+                                        while let Ok(n) = stdout.read(&mut buffer).await {
+                                            if n == 0 {
+                                                break;
+                                            }
+                                            let chunk = buffer[..n].to_vec();
+                                            if local_tx_clone.send(Message::Binary(chunk)).await.is_err() {
+                                                break;
+                                            }
+                                        }
+                                    });
+                                    audio_child = Some(c);
+                                    audio_task = Some(capture_task);
+                                }
+                            } else {
+                                warn!("Failed to spawn parec process");
+                            }
+                        } else if cmd == "StopDesktopAudio" {
+                            info!("StopDesktopAudio command received. Stopping capture.");
+                            if let Some(mut child) = audio_child.take() {
+                                let _ = child.kill().await;
+                            }
+                            if let Some(task) = audio_task.take() {
+                                task.abort();
+                            }
                         }
                     }
                 }
             }
+        }
+
+        // Cleanup audio capture on receiver end
+        if let Some(mut child) = audio_child.take() {
+            let _ = child.kill().await;
+        }
+        if let Some(task) = audio_task.take() {
+            task.abort();
         }
     });
 
@@ -144,4 +221,25 @@ async fn handle_socket(socket: WebSocket, device_id: Option<String>, state: AppS
     }
 
     info!("WebSocket connection closed.");
+}
+
+async fn get_default_sink() -> String {
+    let output = tokio::process::Command::new("pactl")
+        .args(&["info"])
+        .output()
+        .await;
+        
+    if let Ok(out) = output {
+        if out.status.success() {
+            let text = String::from_utf8_lossy(&out.stdout);
+            for line in text.lines() {
+                if line.starts_with("Default Sink") {
+                    if let Some(sink) = line.split(':').nth(1) {
+                        return sink.trim().to_string();
+                    }
+                }
+            }
+        }
+    }
+    "@DEFAULT_SINK@".to_string()
 }
