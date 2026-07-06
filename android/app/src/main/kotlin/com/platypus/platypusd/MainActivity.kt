@@ -61,21 +61,23 @@ class MainActivity : AppCompatActivity() {
     
     private var currentTab = "devices"
 
-    // Neobrutalism Palette
-    private val darkBg = Color.parseColor("#121212")
-    private val darkCard = Color.parseColor("#1E1E1E")
-    private val darkBorder = Color.parseColor("#FFFFFF")
-    private val darkText = Color.parseColor("#FFFFFF")
-    private val darkTextMuted = Color.parseColor("#9CA3AF")
+    // Material You (Pixel Style) Palette
+    private val darkBg = Color.parseColor("#0f1115")
+    private val darkCard = Color.parseColor("#181b21")
+    private val darkBorder = Color.parseColor("#2f333a")
+    private val darkText = Color.parseColor("#e2e2e6")
+    private val darkTextMuted = Color.parseColor("#c4c6d0")
 
-    private val lightBg = Color.parseColor("#F3F4F6")
-    private val lightCard = Color.parseColor("#FFFFFF")
-    private val lightBorder = Color.parseColor("#000000")
-    private val lightText = Color.parseColor("#000000")
-    private val lightTextMuted = Color.parseColor("#4B5563")
+    private val lightBg = Color.parseColor("#f7f9fc")
+    private val lightCard = Color.parseColor("#ffffff")
+    private val lightBorder = Color.parseColor("#e1e3e8")
+    private val lightText = Color.parseColor("#1a1c1e")
+    private val lightTextMuted = Color.parseColor("#43474e")
 
-    private val accentColor = Color.parseColor("#A855F7") // Neobrutalism Purple
-    private val successColor = Color.parseColor("#10B981") // Neobrutalism Green
+    private val accentColor: Int
+        get() = if (isDarkMode) Color.parseColor("#a8c7fa") else Color.parseColor("#0b57d0")
+    private val successColor: Int
+        get() = if (isDarkMode) Color.parseColor("#a8fab4") else Color.parseColor("#198754")
 
     private val updateRunnable = object : Runnable {
         override fun run() {
@@ -125,8 +127,10 @@ class MainActivity : AppCompatActivity() {
         return android.graphics.drawable.GradientDrawable().apply {
             shape = android.graphics.drawable.GradientDrawable.RECTANGLE
             setColor(backgroundColor)
-            setStroke(borderWidthPx, borderColor)
-            cornerRadius = 0f // Sharp corners
+            val density = resources.displayMetrics.density
+            val strokeWidth = if (borderWidthPx > 0) (1 * density).toInt() else 0
+            setStroke(strokeWidth, borderColor)
+            cornerRadius = 24f * density
         }
     }
 
@@ -458,16 +462,25 @@ class MainActivity : AppCompatActivity() {
             }
 
             fun updateToggleVisuals() {
+                val activeBg = getNeobrutalismDrawable(getThemeColor(Color.parseColor("#0842a0"), Color.parseColor("#d3e3fd")), Color.TRANSPARENT, 0)
+                val activeText = getThemeColor(Color.parseColor("#d3e3fd"), Color.parseColor("#041e49"))
+                val inactiveBg = getNeobrutalismDrawable(Color.TRANSPARENT, Color.TRANSPARENT, 0)
+                val inactiveText = getThemeColor(darkTextMuted, lightTextMuted)
+
                 if (selectedMode == "desktop_as_speaker") {
-                    btnDesktop.background = getNeobrutalismDrawable(accentColor, getThemeColor(darkBorder, lightBorder), 5)
-                    btnDesktop.setTextColor(Color.WHITE)
-                    btnMobile.background = getNeobrutalismDrawable(Color.TRANSPARENT, Color.TRANSPARENT, 0)
-                    btnMobile.setTextColor(getThemeColor(darkText, lightText))
+                    btnDesktop.background = activeBg
+                    btnDesktop.setTextColor(activeText)
+                    btnDesktop.setTypeface(null, Typeface.BOLD)
+                    btnMobile.background = inactiveBg
+                    btnMobile.setTextColor(inactiveText)
+                    btnMobile.setTypeface(null, Typeface.NORMAL)
                 } else {
-                    btnMobile.background = getNeobrutalismDrawable(accentColor, getThemeColor(darkBorder, lightBorder), 5)
-                    btnMobile.setTextColor(Color.WHITE)
-                    btnDesktop.background = getNeobrutalismDrawable(Color.TRANSPARENT, Color.TRANSPARENT, 0)
-                    btnDesktop.setTextColor(getThemeColor(darkText, lightText))
+                    btnMobile.background = activeBg
+                    btnMobile.setTextColor(activeText)
+                    btnMobile.setTypeface(null, Typeface.BOLD)
+                    btnDesktop.background = inactiveBg
+                    btnDesktop.setTextColor(inactiveText)
+                    btnDesktop.setTypeface(null, Typeface.NORMAL)
                 }
             }
 
@@ -719,11 +732,21 @@ class MainActivity : AppCompatActivity() {
     private fun createTabButton(title: String, active: Boolean, onClick: () -> Unit): Button {
         return Button(this).apply {
             text = title
-            textSize = 11f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(if (active) Color.WHITE else getThemeColor(darkText, lightText))
+            textSize = 12f
+            setTypeface(null, if (active) Typeface.BOLD else Typeface.NORMAL)
+            setTextColor(
+                if (active) {
+                    getThemeColor(Color.parseColor("#d3e3fd"), Color.parseColor("#041e49"))
+                } else {
+                    getThemeColor(darkTextMuted, lightTextMuted)
+                }
+            )
             background = if (active) {
-                getNeobrutalismDrawable(accentColor, getThemeColor(darkBorder, lightBorder), 5)
+                getNeobrutalismDrawable(
+                    getThemeColor(Color.parseColor("#0842a0"), Color.parseColor("#d3e3fd")),
+                    Color.TRANSPARENT,
+                    0
+                )
             } else {
                 getNeobrutalismDrawable(Color.TRANSPARENT, Color.TRANSPARENT, 0)
             }
