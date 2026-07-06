@@ -37,6 +37,8 @@ export default function App() {
   const [clipDirection, setClipDirection] = useState<string>('bidirectional');
   const [clipAutoSync, setClipAutoSync] = useState<boolean>(true);
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+  const [speakerMode, setSpeakerMode] = useState<string>('desktop_as_speaker');
+  const [callSyncEnabled, setCallSyncEnabled] = useState<boolean>(true);
 
   const fetchClipboardConfig = async () => {
     try {
@@ -61,6 +63,32 @@ export default function App() {
       if (!res.ok) throw new Error("Failed to save clipboard config");
     } catch (err: any) {
       alert(`Error saving config: ${err.message}`);
+    }
+  };
+
+  const fetchBluetoothConfig = async () => {
+    try {
+      const res = await fetch('http://localhost:8080/api/v1/bluetooth/config');
+      if (res.ok) {
+        const data = await res.json();
+        setSpeakerMode(data.speaker_mode);
+        setCallSyncEnabled(data.call_sync_enabled);
+      }
+    } catch (err) {
+      console.error("Failed to fetch bluetooth config:", err);
+    }
+  };
+
+  const saveBluetoothConfig = async (mode: string, enabled: boolean) => {
+    try {
+      const res = await fetch('http://localhost:8080/api/v1/bluetooth/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ speaker_mode: mode, call_sync_enabled: enabled })
+      });
+      if (!res.ok) throw new Error("Failed to save bluetooth config");
+    } catch (err: any) {
+      alert(`Error saving bluetooth config: ${err.message}`);
     }
   };
 
@@ -149,6 +177,7 @@ export default function App() {
   useEffect(() => {
     fetchStatus();
     fetchClipboardConfig();
+    fetchBluetoothConfig();
 
     let ws: WebSocket | null = null;
     let reconnectTimeout: any = null;
@@ -297,7 +326,7 @@ export default function App() {
             className={`tab-btn ${activeTab === 'calls' ? 'active' : ''}`} 
             onClick={() => setActiveTab('calls')}
           >
-            Call Sync {status && (hasConnectedDevices ? 'Active' : 'Offline')}
+            Bluetooth {status && (hasConnectedDevices ? 'Active' : 'Offline')}
           </button>
         </div>
 
@@ -608,8 +637,8 @@ export default function App() {
 
             {activeTab === 'calls' && (
               <div className="card">
-                <h2>Call Control Integration</h2>
-                {!hasConnectedDevices ? (
+                <h2>Bluetooth Connectivity & Audio Role Configuration</h2>
+                {!isBluetoothConnected ? (
                   <div style={{
                     background: 'rgba(244, 63, 94, 0.05)',
                     border: '3px solid var(--danger)',
@@ -619,44 +648,96 @@ export default function App() {
                     flexDirection: 'column',
                     gap: '0.75rem'
                   }}>
-                    <h3 style={{ margin: 0, color: 'var(--danger)', textTransform: 'uppercase' }}>Device Disconnected</h3>
+                    <h3 style={{ margin: 0, color: 'var(--danger)', textTransform: 'uppercase' }}>⚠️ Bluetooth Device Disconnected</h3>
                     <p style={{ margin: 0, fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-                      No mobile devices are currently connected. Live phone call events and remote controls require an active mobile integration.
+                      No mobile device is currently connected to this host via Bluetooth. Audio role modes and call routing require an active Bluetooth link.
                     </p>
-                    <button className="btn btn-primary" style={{ alignSelf: 'flex-start' }} onClick={() => setActiveTab('devices')}>
-                      Pair / Connect Device
+                    <button className="btn btn-primary" style={{ alignSelf: 'flex-start' }} onClick={openBluetoothSettings}>
+                      Open System Bluetooth Settings
                     </button>
                   </div>
-                ) : activeCall ? (
-                  <div className="call-banner" style={{ background: 'var(--bg-secondary)', border: '3px solid var(--border-color)', width: '100%' }}>
-                    <div className="call-info">
-                      <span className="call-title">Active Phone Call Alert ({activeCall.state})</span>
-                      <span className="caller-name">{activeCall.contact_name}</span>
-                      <span className="caller-number">{activeCall.number}</span>
-                    </div>
-                    <div className="call-actions">
-                      {activeCall.state === 'Ringing' && (
-                        <>
-                          <button className="btn btn-success" onClick={() => sendCallAction('accept', activeCall.call_id)}>Accept</button>
-                          <button className="btn btn-danger" onClick={() => sendCallAction('reject', activeCall.call_id)}>Decline</button>
-                        </>
-                      )}
-                      {(activeCall.state === 'Connected' || activeCall.state === 'Muted') && (
-                        <>
-                          {activeCall.state === 'Muted' ? (
-                            <button className="btn btn-primary" onClick={() => sendCallAction('unmute', activeCall.call_id)}>Unmute</button>
-                          ) : (
-                            <button className="btn btn-secondary" onClick={() => sendCallAction('mute', activeCall.call_id)}>Mute</button>
-                          )}
-                          <button className="btn btn-danger" onClick={() => sendCallAction('reject', activeCall.call_id)}>Hang Up</button>
-                        </>
-                      )}
-                    </div>
-                  </div>
                 ) : (
-                  <p style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>
-                    No active calls at the moment. Desktop audio routing loops will be established automatically when a call starts.
-                  </p>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', marginTop: '1rem' }}>
+                    <div className="status-banner" style={{ background: 'rgba(16, 185, 129, 0.05)', border: '3px solid var(--success)', padding: '1rem' }}>
+                      <h3 style={{ margin: 0, color: 'var(--success)' }}>✅ Bluetooth Connection Active</h3>
+                      <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+                        Connected to paired mobile integration device. Audio routing and call states are synchronized.
+                      </p>
+                    </div>
+
+                    <div className="config-section" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                      <h3>Audio Role Mode Settings</h3>
+                      <div className="form-group" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                        <label style={{ fontWeight: 'bold' }}>Audio Role Mode:</label>
+                        <select 
+                          value={speakerMode} 
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setSpeakerMode(val);
+                            saveBluetoothConfig(val, callSyncEnabled);
+                          }}
+                          style={{
+                            background: 'var(--bg-secondary)',
+                            border: '3px solid var(--border-color)',
+                            padding: '0.75rem',
+                            color: 'var(--text)',
+                            fontWeight: 'bold',
+                            outline: 'none'
+                          }}
+                        >
+                          <option value="desktop_as_speaker">Desktop as Speaker (PC plays phone audio)</option>
+                          <option value="mobile_as_speaker">Mobile as Speaker (Phone plays PC audio)</option>
+                        </select>
+                      </div>
+
+                      <div className="form-group" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem' }}>
+                        <input 
+                          type="checkbox" 
+                          id="callSyncToggle"
+                          checked={callSyncEnabled} 
+                          onChange={(e) => {
+                            const val = e.target.checked;
+                            setCallSyncEnabled(val);
+                            saveBluetoothConfig(speakerMode, val);
+                          }}
+                          style={{ width: '20px', height: '20px', accentColor: 'var(--accent)' }}
+                        />
+                        <label htmlFor="callSyncToggle" style={{ fontWeight: 'bold', cursor: 'pointer' }}>Enable Automatic Call Audio Routing</label>
+                      </div>
+                    </div>
+
+                    {activeCall ? (
+                      <div className="call-banner" style={{ background: 'var(--bg-secondary)', border: '3px solid var(--border-color)', width: '100%', marginTop: '1rem' }}>
+                        <div className="call-info">
+                          <span className="call-title">Active Phone Call Alert ({activeCall.state})</span>
+                          <span className="caller-name">{activeCall.contact_name}</span>
+                          <span className="caller-number">{activeCall.number}</span>
+                        </div>
+                        <div className="call-actions">
+                          {activeCall.state === 'Ringing' && (
+                            <>
+                              <button className="btn btn-success" onClick={() => sendCallAction('accept', activeCall.call_id)}>Accept</button>
+                              <button className="btn btn-danger" onClick={() => sendCallAction('reject', activeCall.call_id)}>Decline</button>
+                            </>
+                          )}
+                          {(activeCall.state === 'Connected' || activeCall.state === 'Muted') && (
+                            <>
+                              {activeCall.state === 'Muted' ? (
+                                <button className="btn btn-primary" onClick={() => sendCallAction('unmute', activeCall.call_id)}>Unmute</button>
+                              ) : (
+                                <button className="btn btn-secondary" onClick={() => sendCallAction('mute', activeCall.call_id)}>Mute</button>
+                              )}
+                              <button className="btn btn-danger" onClick={() => sendCallAction('reject', activeCall.call_id)}>Hang Up</button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <p style={{ color: 'var(--text-muted)', fontStyle: 'italic', marginTop: '1rem' }}>
+                        No active call at the moment. Audio routing loops will be established automatically based on the selected Role Mode when a call starts.
+                      </p>
+                    )}
+                  </div>
                 )}
               </div>
             )}
