@@ -231,7 +231,7 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (activeTab === 'files') {
+    if (activeTab === 'files' && isDaemonOnline) {
       sendWebSocketCommand('StartFileServer');
       const timer = setTimeout(() => {
         fetchPcFilesList(pcPath || '/home/saravana');
@@ -239,14 +239,14 @@ export default function App() {
         if (connected.length && connected[0].ip) {
           fetchMobileFilesList(mobilePath || '');
         }
-      }, 200);
+      }, 250);
 
       return () => {
         clearTimeout(timer);
         sendWebSocketCommand('StopFileServer');
       };
     }
-  }, [activeTab, status]);
+  }, [activeTab, isDaemonOnline, status]);
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
 
   const fetchClipboardConfig = async () => {
