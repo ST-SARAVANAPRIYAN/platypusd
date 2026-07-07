@@ -380,7 +380,10 @@ pub struct FileListParams {
 pub async fn list_files(
     Query(params): Query<FileListParams>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let path_str = params.path.unwrap_or_else(|| "/home/saravana".to_string());
+    let path_str = match params.path {
+        Some(ref p) if !p.trim().is_empty() => p.clone(),
+        _ => "/home/saravana".to_string(),
+    };
     let path = std::path::Path::new(&path_str);
     
     if !path.exists() {

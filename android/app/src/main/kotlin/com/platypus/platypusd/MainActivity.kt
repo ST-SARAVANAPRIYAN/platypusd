@@ -816,6 +816,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun switchTab(tab: String) {
         currentTab = tab
+        if (tab == "files") {
+            fetchPcFiles(currentPcPath)
+        }
         initLayout()
     }
 

@@ -567,3 +567,8 @@ input:checked + .slider:before {
 .file-item-hover:hover {
   background-color: var(--border-color) !important;
 }
+
+.container.full-width-explorer {
+  max-width: 1400px;
+  padding: 2rem;
+}

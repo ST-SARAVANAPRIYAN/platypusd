@@ -50,6 +50,10 @@ export default function App() {
   const [mobileSort, setMobileSort] = useState<'name' | 'size' | 'date'>('name');
   const [mobileSortOrder, setMobileSortOrder] = useState<'asc' | 'desc'>('asc');
   const [selectedFileInfo, setSelectedFileInfo] = useState<any | null>(null);
+  const [viewMode, setViewMode] = useState<'list' | 'grid' | 'compact'>('list');
+  const [previewFile, setPreviewFile] = useState<any | null>(null);
+  const [previewContent, setPreviewContent] = useState<string | null>(null);
+  const [loadingPreview, setLoadingPreview] = useState<boolean>(false);
 
   const showToast = (message: string) => {
     const toast = document.getElementById('toast');
@@ -161,6 +165,40 @@ export default function App() {
       console.error(e);
     } finally {
       setLoadingMobile(false);
+    }
+  };
+
+  const handleFileClick = async (file: any) => {
+    if (file.is_dir) {
+      fetchMobileFilesList(file.path);
+      return;
+    }
+    
+    setPreviewFile(file);
+    setPreviewContent(null);
+    
+    const connected = status?.paired_devices.filter(d => d.is_online) || [];
+    if (!connected.length || !connected[0].ip) return;
+    const phoneIp = connected[0].ip;
+    
+    const fileExt = file.name.split('.').pop()?.toLowerCase();
+    const isText = ['txt', 'log', 'json', 'xml', 'js', 'ts', 'tsx', 'css', 'html', 'md', 'ini', 'sh', 'bat', 'csv', 'yaml', 'yml'].includes(fileExt || '');
+    
+    if (isText) {
+      setLoadingPreview(true);
+      try {
+        const res = await fetch(`http://${phoneIp}:9090/download?path=${encodeURIComponent(file.path)}`);
+        if (res.ok) {
+          const text = await res.text();
+          setPreviewContent(text);
+        } else {
+          setPreviewContent("Error: Unable to load file content.");
+        }
+      } catch (err: any) {
+        setPreviewContent(`Error: ${err.message}`);
+      } finally {
+        setLoadingPreview(false);
+      }
     }
   };
 
@@ -410,7 +448,7 @@ export default function App() {
   const isBluetoothConnected = connectedDevices.some(d => d.is_bluetooth_connected);
   return (
     <div className={`theme-root ${theme}-mode`}>
-      <div className="container">
+      <div className={`container ${activeTab === 'files' ? 'full-width-explorer' : ''}`}>
         <header>
           <h1>platypusd platform</h1>
           <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
@@ -622,8 +660,99 @@ export default function App() {
             )}
 
             {activeTab === 'files' && (
-              <section style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', marginTop: '1rem' }} aria-label="File Explorer">
+              <section style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', marginTop: '1rem', width: '100%' }} aria-label="File Explorer">
                 
+                {/* Media Preview / File Opener Modal */}
+                {previewFile && (
+                  <div style={{
+                    position: 'fixed',
+                    top: 0,
+                    left: 0,
+                    width: '100vw',
+                    height: '100vh',
+                    background: 'rgba(0, 0, 0, 0.85)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 9999,
+                    backdropFilter: 'blur(8px)',
+                    padding: '2rem'
+                  }}>
+                    <aside className="card" style={{ width: '90%', maxWidth: '800px', height: '85%', display: 'flex', flexDirection: 'column', gap: '1.25rem', background: 'var(--bg-secondary)', border: '2px solid var(--accent)', position: 'relative', padding: '2rem' }}>
+                      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: '0.75rem', borderBottom: '1px solid var(--border-color)' }}>
+                        <h3 style={{ margin: 0, textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap', maxWidth: '75%', fontSize: '1.1rem' }}>{previewFile.name}</h3>
+                        <button 
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => setPreviewFile(null)}
+                        >
+                          Close Preview
+                        </button>
+                      </header>
+                      
+                      <div style={{ flexGrow: 1, overflow: 'auto', background: 'var(--bg-primary)', borderRadius: '12px', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}>
+                        {(() => {
+                          const ext = previewFile.name.split('.').pop()?.toLowerCase() || '';
+                          const phoneIp = status?.paired_devices.filter(d => d.is_online)[0]?.ip;
+                          const fileUrl = `http://${phoneIp}:9090/download?path=${encodeURIComponent(previewFile.path)}`;
+                          
+                          if (['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(ext)) {
+                            return <img src={fileUrl} alt={previewFile.name} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />;
+                          }
+                          if (['mp4', 'webm', 'ogg', 'mkv'].includes(ext)) {
+                            return <video src={fileUrl} controls autoPlay style={{ maxWidth: '100%', maxHeight: '100%' }} />;
+                          }
+                          if (['mp3', 'wav', 'ogg', 'aac', 'm4a'].includes(ext)) {
+                            return <audio src={fileUrl} controls autoPlay style={{ width: '80%' }} />;
+                          }
+                          if (loadingPreview) {
+                            return <div style={{ color: 'var(--text-muted)' }}>Loading text content...</div>;
+                          }
+                          if (previewContent !== null) {
+                            return (
+                              <pre style={{ width: '100%', height: '100%', margin: 0, padding: '0.75rem', fontSize: '0.85rem', fontFamily: 'monospace', overflow: 'auto', whiteSpace: 'pre-wrap', color: 'var(--text-main)', textAlign: 'left' }}>
+                                {previewContent}
+                              </pre>
+                            );
+                          }
+                          return (
+                            <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '1rem', alignItems: 'center' }}>
+                              <span style={{ color: 'var(--text-muted)', fontSize: '0.95rem' }}>Preview unavailable for this format ({ext.toUpperCase()})</span>
+                              <button 
+                                className="btn btn-primary"
+                                onClick={() => window.open(fileUrl)}
+                              >
+                                Download File
+                              </button>
+                            </div>
+                          );
+                        })()}
+                      </div>
+                      
+                      <footer style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.85rem', color: 'var(--text-muted)', paddingTop: '0.75rem', borderTop: '1px solid var(--border-color)' }}>
+                        <span>Size: {(previewFile.size / 1024).toFixed(2)} KB ({previewFile.size} bytes)</span>
+                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                          <button 
+                            className="btn btn-danger btn-sm"
+                            style={{ background: 'var(--danger-container)', color: 'var(--danger)' }}
+                            onClick={() => {
+                              deleteMobileFile(previewFile.path);
+                              setPreviewFile(null);
+                            }}
+                          >
+                            Delete File
+                          </button>
+                          <button 
+                            className="btn btn-primary btn-sm"
+                            onClick={() => window.open(`http://${status?.paired_devices.filter(d => d.is_online)[0].ip}:9090/download?path=${encodeURIComponent(previewFile.path)}`)}
+                          >
+                            Download
+                          </button>
+                        </div>
+                      </footer>
+                    </aside>
+                  </div>
+                )}
+
                 {/* Selected File Details Overlay */}
                 {selectedFileInfo && (
                   <aside className="card" style={{ border: '2px solid var(--accent)', background: 'var(--bg-secondary)', position: 'relative' }}>
@@ -651,173 +780,351 @@ export default function App() {
                   </aside>
                 )}
 
-                {/* Mobile File Explorer (browsed from PC) */}
-                <article className="card" style={{ display: 'flex', flexDirection: 'column', minHeight: '520px', width: '100%' }}>
-                  <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                    <h2 style={{ margin: 0 }}>Browse Mobile Storage</h2>
-                    {status?.paired_devices.some(d => d.is_online) ? (
-                      <span className="status-badge online" style={{ fontSize: '0.8rem' }}>Server Active</span>
-                    ) : (
-                      <span className="status-badge offline" style={{ fontSize: '0.8rem' }}>Offline</span>
-                    )}
-                  </header>
+                {/* Main Side-by-Side Real OS Explorer Interface */}
+                <div style={{ display: 'flex', gap: '1.5rem', width: '100%', alignItems: 'stretch' }}>
+                  
+                  {/* Left Sidebar: Quick Access Places */}
+                  <aside className="card" style={{ width: '240px', flexShrink: 0, padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                    <h3 style={{ margin: 0, fontSize: '0.85rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 'bold', letterSpacing: '0.05em' }}>Places</h3>
+                    <nav style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                      <button 
+                        className={`btn btn-sm ${mobilePath === '/sdcard' || mobilePath === '' ? 'btn-primary' : 'btn-secondary'}`} 
+                        style={{ width: '100%', textAlign: 'left', borderRadius: '8px', padding: '0.6rem 1rem' }} 
+                        onClick={() => fetchMobileFilesList('/sdcard')}
+                      >
+                        Internal Storage
+                      </button>
+                      <button 
+                        className={`btn btn-sm ${mobilePath === '/sdcard/Download' ? 'btn-primary' : 'btn-secondary'}`} 
+                        style={{ width: '100%', textAlign: 'left', borderRadius: '8px', padding: '0.6rem 1rem' }} 
+                        onClick={() => fetchMobileFilesList('/sdcard/Download')}
+                      >
+                        Downloads
+                      </button>
+                      <button 
+                        className={`btn btn-sm ${mobilePath === '/sdcard/DCIM' ? 'btn-primary' : 'btn-secondary'}`} 
+                        style={{ width: '100%', textAlign: 'left', borderRadius: '8px', padding: '0.6rem 1rem' }} 
+                        onClick={() => fetchMobileFilesList('/sdcard/DCIM')}
+                      >
+                        Camera / DCIM
+                      </button>
+                      <button 
+                        className={`btn btn-sm ${mobilePath === '/sdcard/Pictures' ? 'btn-primary' : 'btn-secondary'}`} 
+                        style={{ width: '100%', textAlign: 'left', borderRadius: '8px', padding: '0.6rem 1rem' }} 
+                        onClick={() => fetchMobileFilesList('/sdcard/Pictures')}
+                      >
+                        Pictures
+                      </button>
+                      <button 
+                        className={`btn btn-sm ${mobilePath === '/sdcard/Documents' ? 'btn-primary' : 'btn-secondary'}`} 
+                        style={{ width: '100%', textAlign: 'left', borderRadius: '8px', padding: '0.6rem 1rem' }} 
+                        onClick={() => fetchMobileFilesList('/sdcard/Documents')}
+                      >
+                        Documents
+                      </button>
+                      <button 
+                        className={`btn btn-sm ${mobilePath === '/sdcard/Music' ? 'btn-primary' : 'btn-secondary'}`} 
+                        style={{ width: '100%', textAlign: 'left', borderRadius: '8px', padding: '0.6rem 1rem' }} 
+                        onClick={() => fetchMobileFilesList('/sdcard/Music')}
+                      >
+                        Music
+                      </button>
+                    </nav>
+                  </aside>
 
-                  {status?.paired_devices.some(d => d.is_online) ? (
-                    <>
-                      {/* Search & Sort Controls */}
-                      <menu style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1rem', padding: 0, margin: '0 0 1rem 0' }}>
-                        <input 
-                          type="text" 
-                          placeholder="Search files..." 
-                          value={mobileSearch}
-                          onChange={(e) => setMobileSearch(e.target.value)}
-                          style={{ width: '100%', padding: '0.6rem 1rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-main)' }}
-                        />
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Sort by:</span>
-                            <select 
-                              value={mobileSort} 
-                              onChange={(e) => setMobileSort(e.target.value as any)}
-                              style={{ padding: '0.3rem 0.5rem', borderRadius: '4px', fontSize: '0.8rem' }}
-                            >
-                              <option value="name">Name</option>
-                              <option value="size">Size</option>
-                              <option value="date">Date Modified</option>
-                            </select>
-                            <button 
-                              className="btn btn-secondary btn-sm"
-                              style={{ padding: '0.2rem 0.6rem !important', fontSize: '0.75rem !important' }}
-                              onClick={() => setMobileSortOrder(p => p === 'asc' ? 'desc' : 'asc')}
-                            >
-                              {mobileSortOrder === 'asc' ? 'Asc' : 'Desc'}
-                            </button>
+                  {/* Right Explorer Content Panel */}
+                  <article className="card" style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', minHeight: '620px', padding: '2rem' }}>
+                    
+                    {/* Header: Title and Service Indicator */}
+                    <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+                      <h2 style={{ margin: 0, fontSize: '1.3rem', fontWeight: 'bold' }}>Mobile Device Files</h2>
+                      {status?.paired_devices.some(d => d.is_online) ? (
+                        <span className="status-badge online" style={{ fontSize: '0.8rem' }}>Server Active</span>
+                      ) : (
+                        <span className="status-badge offline" style={{ fontSize: '0.8rem' }}>Offline</span>
+                      )}
+                    </header>
+
+                    {status?.paired_devices.some(d => d.is_online) ? (
+                      <>
+                        {/* Toolbar: Navigation Address and Action Buttons */}
+                        <menu style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem', marginBottom: '1rem', padding: 0, margin: '0 0 1.25rem 0' }}>
+                          
+                          {/* Search, Layout toggles and Upload */}
+                          <div style={{ display: 'flex', gap: '0.75rem', width: '100%', flexWrap: 'wrap', alignItems: 'center' }}>
+                            
+                            <input 
+                              type="text" 
+                              placeholder="Search current directory..." 
+                              value={mobileSearch}
+                              onChange={(e) => setMobileSearch(e.target.value)}
+                              style={{ flexGrow: 1, minWidth: '220px', padding: '0.6rem 1rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-main)' }}
+                            />
+
+                            {/* Layout View Toggles */}
+                            <div style={{ display: 'flex', gap: '0.2rem', background: 'var(--bg-primary)', padding: '3px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                              <button 
+                                className={`btn btn-sm ${viewMode === 'list' ? 'btn-primary' : 'btn-secondary'}`} 
+                                style={{ padding: '0.35rem 0.75rem', borderRadius: '6px', fontSize: '0.8rem' }}
+                                onClick={() => setViewMode('list')}
+                              >
+                                List
+                              </button>
+                              <button 
+                                className={`btn btn-sm ${viewMode === 'grid' ? 'btn-primary' : 'btn-secondary'}`} 
+                                style={{ padding: '0.35rem 0.75rem', borderRadius: '6px', fontSize: '0.8rem' }}
+                                onClick={() => setViewMode('grid')}
+                              >
+                                Grid
+                              </button>
+                              <button 
+                                className={`btn btn-sm ${viewMode === 'compact' ? 'btn-primary' : 'btn-secondary'}`} 
+                                style={{ padding: '0.35rem 0.75rem', borderRadius: '6px', fontSize: '0.8rem' }}
+                                onClick={() => setViewMode('compact')}
+                              >
+                                Compact
+                              </button>
+                            </div>
+
+                            {/* File picker Upload */}
+                            <label className="btn btn-primary btn-sm" style={{ cursor: 'pointer', margin: 0, display: 'inline-flex', alignItems: 'center' }}>
+                              Upload File
+                              <input 
+                                type="file" 
+                                style={{ display: 'none' }}
+                                onChange={(e) => {
+                                  const file = e.target.files?.[0];
+                                  if (file) uploadFileToMobile(file);
+                                }}
+                              />
+                            </label>
                           </div>
 
-                          {/* File picker Upload */}
-                          <label className="btn btn-primary btn-sm" style={{ cursor: 'pointer', margin: 0 }}>
-                            Upload File
-                            <input 
-                              type="file" 
-                              style={{ display: 'none' }}
-                              onChange={(e) => {
-                                const file = e.target.files?.[0];
-                                if (file) uploadFileToMobile(file);
-                              }}
-                            />
-                          </label>
-                        </div>
-                      </menu>
+                          {/* Path address and Sort params */}
+                          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', width: '100%', flexWrap: 'wrap' }}>
+                            <nav style={{ display: 'flex', gap: '0.4rem', flexGrow: 1, alignItems: 'center', overflow: 'hidden' }}>
+                              <button 
+                                className="btn btn-secondary btn-sm"
+                                onClick={() => {
+                                  if (mobilePath.includes('/')) {
+                                    const parent = mobilePath.substring(0, mobilePath.lastIndexOf('/'));
+                                    fetchMobileFilesList(parent || '/sdcard');
+                                  }
+                                }}
+                              >
+                                Up
+                              </button>
+                              <code style={{ flexGrow: 1, padding: '0.45rem 0.75rem', background: 'var(--bg-primary)', borderRadius: '6px', fontSize: '0.85rem', overflowX: 'auto', whiteSpace: 'nowrap', border: '1px solid var(--border-color)', display: 'block' }}>
+                                {mobilePath || '/sdcard'}
+                              </code>
+                            </nav>
 
-                      {/* Navigation Row */}
-                      <nav style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem', alignItems: 'center' }}>
-                        <button 
-                          className="btn btn-secondary btn-sm"
-                          onClick={() => {
-                            if (mobilePath.includes('/')) {
-                              const parent = mobilePath.substring(0, mobilePath.lastIndexOf('/'));
-                              fetchMobileFilesList(parent || '/sdcard');
-                            }
-                          }}
-                        >
-                          Up
-                        </button>
-                        <code style={{ flexGrow: 1, padding: '0.4rem 0.75rem', background: 'var(--bg-primary)', borderRadius: '6px', fontSize: '0.85rem', overflowX: 'auto', whiteSpace: 'nowrap', border: '1px solid var(--border-color)' }}>
-                          {mobilePath || '/sdcard'}
-                        </code>
-                      </nav>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
+                              <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Sort by:</span>
+                              <select 
+                                value={mobileSort} 
+                                onChange={(e) => setMobileSort(e.target.value as any)}
+                                style={{ padding: '0.3rem 0.5rem', borderRadius: '4px', fontSize: '0.8rem', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-main)' }}
+                              >
+                                <option value="name">Name</option>
+                                <option value="size">Size</option>
+                                <option value="date">Date Modified</option>
+                              </select>
+                              <button 
+                                className="btn btn-secondary btn-sm"
+                                style={{ padding: '0.2rem 0.6rem !important', fontSize: '0.75rem !important' }}
+                                onClick={() => setMobileSortOrder(p => p === 'asc' ? 'desc' : 'asc')}
+                              >
+                                {mobileSortOrder === 'asc' ? 'Asc' : 'Desc'}
+                              </button>
+                            </div>
+                          </div>
 
-                      {/* File List Pane */}
-                      {loadingMobile ? (
-                        <div style={{ flexGrow: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>Loading storage...</div>
-                      ) : (
-                        <div style={{ flexGrow: 1, maxHeight: '380px', overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: '8px', background: 'var(--bg-primary)' }}>
-                          {getProcessedFiles(mobileFiles, mobileSearch, mobileSort, mobileSortOrder).length === 0 ? (
-                            <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>No matching files found.</div>
-                          ) : (
-                            <ul style={{ listStyleType: 'none', padding: 0, margin: 0 }}>
-                              {getProcessedFiles(mobileFiles, mobileSearch, mobileSort, mobileSortOrder).map((file: any) => (
-                                <li 
-                                  key={file.path} 
-                                  style={{ 
-                                    display: 'flex', 
-                                    alignItems: 'center', 
-                                    padding: '0.6rem 0.85rem', 
-                                    borderBottom: '1px solid var(--border-color)',
-                                    transition: 'background 0.2s'
-                                  }}
-                                  className="file-item-hover"
-                                >
-                                  <span 
-                                    style={{ 
-                                      padding: '0.15rem 0.4rem', 
-                                      fontSize: '0.7rem', 
-                                      textTransform: 'uppercase', 
-                                      marginRight: '0.75rem', 
-                                      background: file.is_dir ? 'var(--accent)' : 'var(--bg-secondary)', 
-                                      color: file.is_dir ? 'white' : 'var(--text-main)', 
-                                      border: '1px solid var(--border-color)',
-                                      fontWeight: 'bold',
-                                      borderRadius: '4px',
-                                      cursor: 'pointer'
-                                    }}
-                                    onClick={() => {
-                                      if (file.is_dir) fetchMobileFilesList(file.path);
-                                    }}
-                                  >
-                                    {file.is_dir ? 'Folder' : 'File'}
-                                  </span>
-                                  <div 
-                                    style={{ flexGrow: 1, minWidth: 0, cursor: file.is_dir ? 'pointer' : 'default' }}
-                                    onClick={() => {
-                                      if (file.is_dir) fetchMobileFilesList(file.path);
-                                    }}
-                                  >
-                                    <div style={{ fontWeight: 500, fontSize: '0.85rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.name}</div>
-                                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                                      {file.is_dir ? 'Folder' : `${(file.size / 1024).toFixed(1)} KB`}
-                                    </div>
-                                  </div>
-                                  <div style={{ display: 'flex', gap: '0.35rem' }}>
-                                    {!file.is_dir && (
-                                      <button 
-                                        className="btn btn-secondary btn-sm" 
-                                        style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem' }}
-                                        onClick={() => window.open(`http://${status?.paired_devices.filter(d => d.is_online)[0].ip}:9090/download?path=${encodeURIComponent(file.path)}`)}
+                        </menu>
+
+                        {/* File Pane Content wrapper */}
+                        {loadingMobile ? (
+                          <div style={{ flexGrow: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: '0.95rem' }}>Loading phone storage...</div>
+                        ) : (
+                          <div style={{ flexGrow: 1, minHeight: '380px', border: '1px solid var(--border-color)', borderRadius: '12px', background: 'var(--bg-primary)', overflow: 'hidden' }}>
+                            {getProcessedFiles(mobileFiles, mobileSearch, mobileSort, mobileSortOrder).length === 0 ? (
+                              <div style={{ padding: '4rem 2rem', textAlign: 'center', color: 'var(--text-muted)' }}>No matching files found.</div>
+                            ) : (
+                              
+                              /* RENDERING VIEW: LIST MODE */
+                              viewMode === 'list' && (
+                                <ul style={{ listStyleType: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column' }}>
+                                  {getProcessedFiles(mobileFiles, mobileSearch, mobileSort, mobileSortOrder).map((file: any) => (
+                                    <li 
+                                      key={file.path} 
+                                      style={{ 
+                                        display: 'flex', 
+                                        alignItems: 'center', 
+                                        padding: '0.7rem 1rem', 
+                                        borderBottom: '1px solid var(--border-color)',
+                                        transition: 'background 0.2s',
+                                        cursor: 'pointer'
+                                      }}
+                                      className="file-item-hover"
+                                      onClick={() => handleFileClick(file)}
+                                    >
+                                      <span 
+                                        style={{ 
+                                          padding: '0.2rem 0.5rem', 
+                                          fontSize: '0.7rem', 
+                                          textTransform: 'uppercase', 
+                                          marginRight: '0.85rem', 
+                                          background: file.is_dir ? 'var(--accent)' : 'var(--bg-secondary)', 
+                                          color: file.is_dir ? 'white' : 'var(--text-main)', 
+                                          border: '1px solid var(--border-color)',
+                                          fontWeight: 'bold',
+                                          borderRadius: '4px'
+                                        }}
                                       >
-                                        Download
-                                      </button>
-                                    )}
-                                    <button 
-                                      className="btn btn-secondary btn-sm" 
-                                      style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem' }}
-                                      onClick={() => setSelectedFileInfo(file)}
-                                    >
-                                      Details
-                                    </button>
-                                    <button 
-                                      className="btn btn-danger btn-sm" 
-                                      style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem', background: 'var(--danger-container)', color: 'var(--danger)' }}
-                                      onClick={() => deleteMobileFile(file.path)}
-                                    >
-                                      Delete
-                                    </button>
-                                  </div>
-                                </li>
-                              ))}
-                            </ul>
-                          )}
-                        </div>
-                      )}
-                    </>
-                  ) : (
-                    <div style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '2rem', textAlign: 'center', color: 'var(--text-muted)', gap: '1rem' }}>
-                      <span>Mobile device is offline.</span>
-                      <span style={{ fontSize: '0.9rem' }}>Please connect your phone to launch the lazy-loaded file server.</span>
-                    </div>
-                  )}
-                </article>
+                                        {file.is_dir ? 'Folder' : 'File'}
+                                      </span>
+                                      <div style={{ flexGrow: 1, minWidth: 0 }}>
+                                        <div style={{ fontWeight: 500, fontSize: '0.85rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.name}</div>
+                                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                          {file.is_dir ? 'Folder' : `${(file.size / 1024).toFixed(1)} KB`}
+                                        </div>
+                                      </div>
+                                      <div style={{ display: 'flex', gap: '0.35rem' }} onClick={(e) => e.stopPropagation()}>
+                                        <button 
+                                          className="btn btn-secondary btn-sm" 
+                                          style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
+                                          onClick={() => setSelectedFileInfo(file)}
+                                        >
+                                          Details
+                                        </button>
+                                        <button 
+                                          className="btn btn-danger btn-sm" 
+                                          style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem', background: 'var(--danger-container)', color: 'var(--danger)' }}
+                                          onClick={() => deleteMobileFile(file.path)}
+                                        >
+                                          Delete
+                                        </button>
+                                      </div>
+                                    </li>
+                                  ))}
+                                </ul>
+                              )
 
+                              /* RENDERING VIEW: GRID MODE */
+                              || viewMode === 'grid' && (
+                                <ul style={{ 
+                                  listStyleType: 'none', 
+                                  padding: '1.25rem', 
+                                  margin: 0, 
+                                  display: 'grid', 
+                                  gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', 
+                                  gap: '1.25rem',
+                                  maxHeight: '420px',
+                                  overflowY: 'auto'
+                                }}>
+                                  {getProcessedFiles(mobileFiles, mobileSearch, mobileSort, mobileSortOrder).map((file: any) => {
+                                    const ext = file.name.split('.').pop()?.toLowerCase() || '';
+                                    const phoneIp = status?.paired_devices.filter(d => d.is_online)[0]?.ip;
+                                    const fileUrl = `http://${phoneIp}:9090/download?path=${encodeURIComponent(file.path)}`;
+                                    const isImage = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(ext);
+
+                                    return (
+                                      <li 
+                                        key={file.path} 
+                                        style={{ 
+                                          display: 'flex', 
+                                          flexDirection: 'column', 
+                                          padding: '0.75rem', 
+                                          borderRadius: '8px',
+                                          border: '1px solid var(--border-color)',
+                                          background: 'var(--bg-secondary)',
+                                          cursor: 'pointer',
+                                          transition: 'transform 0.2s, border-color 0.2s',
+                                          textAlign: 'center',
+                                          alignItems: 'center'
+                                        }}
+                                        className="file-item-hover"
+                                        onClick={() => handleFileClick(file)}
+                                      >
+                                        {file.is_dir ? (
+                                          <div style={{ height: '70px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '2.5rem', color: 'var(--accent)' }}>
+                                            📁
+                                          </div>
+                                        ) : isImage && phoneIp ? (
+                                          <img 
+                                            src={fileUrl} 
+                                            alt={file.name} 
+                                            loading="lazy"
+                                            style={{ width: '100%', height: '70px', objectFit: 'cover', borderRadius: '4px', border: '1px solid var(--border-color)', marginBottom: '0.4rem' }} 
+                                          />
+                                        ) : (
+                                          <div style={{ height: '70px', width: '100%', background: 'var(--bg-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', fontSize: '0.8rem', borderRadius: '4px', border: '1px solid var(--border-color)', marginBottom: '0.4rem', color: 'var(--text-muted)' }}>
+                                            {ext.toUpperCase()}
+                                          </div>
+                                        )}
+                                        <div style={{ fontSize: '0.8rem', fontWeight: '500', width: '100%', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap', marginTop: '0.25rem' }}>
+                                          {file.name}
+                                        </div>
+                                        <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                                          {file.is_dir ? 'Folder' : `${(file.size / 1024).toFixed(0)} KB`}
+                                        </div>
+                                      </li>
+                                    );
+                                  })}
+                                </ul>
+                              )
+
+                              /* RENDERING VIEW: COMPACT MODE */
+                              || viewMode === 'compact' && (
+                                <ul style={{ 
+                                  listStyleType: 'none', 
+                                  padding: '0.85rem', 
+                                  margin: 0, 
+                                  display: 'grid', 
+                                  gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', 
+                                  gap: '0.5rem',
+                                  maxHeight: '420px',
+                                  overflowY: 'auto'
+                                }}>
+                                  {getProcessedFiles(mobileFiles, mobileSearch, mobileSort, mobileSortOrder).map((file: any) => (
+                                    <li 
+                                      key={file.path} 
+                                      style={{ 
+                                        display: 'flex', 
+                                        alignItems: 'center', 
+                                        padding: '0.45rem 0.6rem', 
+                                        borderRadius: '6px',
+                                        border: '1px solid var(--border-color)',
+                                        background: 'var(--bg-secondary)',
+                                        cursor: 'pointer',
+                                        transition: 'background 0.2s',
+                                        gap: '0.4rem'
+                                      }}
+                                      className="file-item-hover"
+                                      onClick={() => handleFileClick(file)}
+                                    >
+                                      <span style={{ fontSize: '0.85rem' }}>{file.is_dir ? '📁' : '📄'}</span>
+                                      <span style={{ fontSize: '0.75rem', fontWeight: '500', flexGrow: 1, textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                                        {file.name}
+                                      </span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              )
+
+                            )}
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <div style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '2rem', textAlign: 'center', color: 'var(--text-muted)', gap: '1rem' }}>
+                        <span>Mobile device is offline.</span>
+                        <span style={{ fontSize: '0.9rem' }}>Please connect your phone to launch the lazy-loaded file server.</span>
+                      </div>
+                    )}
+                  </article>
+
+                </div>
               </section>
             )}
 
