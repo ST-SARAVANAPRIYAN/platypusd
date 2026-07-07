@@ -41,6 +41,9 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize & Start Local Network Discovery (mDNS)
     let port: u16 = 8080;
+
+    // Initialize RFCOMM Bootstrapping Server (Bluetooth)
+    services::rfcomm::start_rfcomm_server(db.clone(), port);
     match discovery::DiscoveryManager::new() {
         Ok(discovery_manager) => {
             if let Err(e) = discovery_manager.start(&identity.device_id, &identity.device_name, &identity.public_key, port) {
@@ -60,6 +63,8 @@ async fn main() -> anyhow::Result<()> {
         identity,
         tx,
         active_connections: Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new())),
+        connection_types: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+        device_ips: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
         active_bluetooth: Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new())),
     };
 
@@ -91,6 +96,16 @@ async fn main() -> anyhow::Result<()> {
                             "is_connected": true
                         }),
                     });
+                } else if !is_connected_now && is_connected_currently {
+                    info!("Bluetooth disconnection detected dynamically for device: {} ({})", name, id);
+                    active_bt.remove(&id);
+                    let _ = tx_clone.send(api::WsMessage {
+                        event: "BluetoothStateChanged".to_string(),
+                        data: serde_json::json!({
+                            "device_id": id,
+                            "is_connected": false
+                        }),
+                    });
                 }
             }
         }
@@ -105,7 +120,7 @@ async fn main() -> anyhow::Result<()> {
     info!("Exposing public endpoints on http://{}", bind_addr);
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await?;
 
     Ok(())
 }

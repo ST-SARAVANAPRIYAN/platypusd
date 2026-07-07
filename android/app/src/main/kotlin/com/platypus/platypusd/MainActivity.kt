@@ -27,20 +27,25 @@ import org.json.JSONObject
 class MainActivity : AppCompatActivity() {
 
     private val PERMISSION_REQUEST_CODE = 101
+    private val STORAGE_PERMISSION_CODE = 102
+    private var currentPcPath = ""
+    private var pcFilesList = org.json.JSONArray()
     private val handler = Handler(Looper.getMainLooper())
     
     // Theme state
     private var isDarkMode = true
     
     // Tab buttons
-    private lateinit var devicesTabBtn: Button
-    private lateinit var callsTabBtn: Button
+    private lateinit var connectionTabBtn: Button
+    private lateinit var settingsTabBtn: Button
     private lateinit var clipboardTabBtn: Button
+    private lateinit var filesTabBtn: Button
     
     // Tab containers
-    private lateinit var devicesContainer: LinearLayout
-    private lateinit var callsContainer: LinearLayout
+    private lateinit var connectionContainer: LinearLayout
+    private lateinit var settingsContainer: LinearLayout
     private lateinit var clipboardContainer: LinearLayout
+    private lateinit var filesContainer: LinearLayout
 
     // Connection status card views
     private lateinit var statusBadge: TextView
@@ -59,23 +64,25 @@ class MainActivity : AppCompatActivity() {
     private lateinit var clipboardStatusText: TextView
     private lateinit var clipboardInput: EditText
     
-    private var currentTab = "devices"
+    private var currentTab = "connection"
 
-    // Neobrutalism Palette
-    private val darkBg = Color.parseColor("#121212")
-    private val darkCard = Color.parseColor("#1E1E1E")
-    private val darkBorder = Color.parseColor("#FFFFFF")
-    private val darkText = Color.parseColor("#FFFFFF")
-    private val darkTextMuted = Color.parseColor("#9CA3AF")
+    // Material You / Android 16 Palette
+    private val darkBg = Color.parseColor("#0B0D11")
+    private val darkCard = Color.parseColor("#181B21")
+    private val darkBorder = Color.parseColor("#2F333A")
+    private val darkText = Color.parseColor("#E6E1E5")
+    private val darkTextMuted = Color.parseColor("#CAC4D0")
 
-    private val lightBg = Color.parseColor("#F3F4F6")
+    private val lightBg = Color.parseColor("#F0F4F9")
     private val lightCard = Color.parseColor("#FFFFFF")
-    private val lightBorder = Color.parseColor("#000000")
-    private val lightText = Color.parseColor("#000000")
-    private val lightTextMuted = Color.parseColor("#4B5563")
+    private val lightBorder = Color.parseColor("#E1E3E8")
+    private val lightText = Color.parseColor("#1D1B20")
+    private val lightTextMuted = Color.parseColor("#49454F")
 
-    private val accentColor = Color.parseColor("#A855F7") // Neobrutalism Purple
-    private val successColor = Color.parseColor("#10B981") // Neobrutalism Green
+    private val accentColor: Int
+        get() = if (isDarkMode) Color.parseColor("#A8C7FA") else Color.parseColor("#0B57D0")
+    private val successColor: Int
+        get() = if (isDarkMode) Color.parseColor("#6DDB9C") else Color.parseColor("#146C43")
 
     private val updateRunnable = object : Runnable {
         override fun run() {
@@ -89,7 +96,8 @@ class MainActivity : AppCompatActivity() {
         instance = this
         
         initLayout()
-
+        CustomToast.show(this, "Welcome to platypus", isDarkMode)
+        
         // Request Permissions
         if (checkPermissions()) {
             startIntegrationService()
@@ -121,12 +129,14 @@ class MainActivity : AppCompatActivity() {
         return if (isDarkMode) darkVal else lightVal
     }
 
-    private fun getNeobrutalismDrawable(backgroundColor: Int, borderColor: Int, borderWidthPx: Int): android.graphics.drawable.GradientDrawable {
+    private fun getNeobrutalismDrawable(backgroundColor: Int, borderColor: Int, borderWidthPx: Int, radius: Float = 56f): android.graphics.drawable.GradientDrawable {
         return android.graphics.drawable.GradientDrawable().apply {
             shape = android.graphics.drawable.GradientDrawable.RECTANGLE
             setColor(backgroundColor)
-            setStroke(borderWidthPx, borderColor)
-            cornerRadius = 0f // Sharp corners
+            if (borderWidthPx > 0) {
+                setStroke(2, borderColor) // Force thin stroke (2px)
+            }
+            cornerRadius = radius
         }
     }
 
@@ -190,17 +200,19 @@ class MainActivity : AppCompatActivity() {
         val tabContainer = LinearLayout(this).apply {
             id = View.generateViewId()
             orientation = LinearLayout.HORIZONTAL
-            background = getNeobrutalismDrawable(getThemeColor(darkCard, lightCard), getThemeColor(darkBorder, lightBorder), 5)
+            background = getNeobrutalismDrawable(getThemeColor(darkCard, lightCard), getThemeColor(darkBorder, lightBorder), 5, 100f)
             setPadding(10, 10, 10, 10)
         }
 
-        devicesTabBtn = createTabButton("Devices", currentTab == "devices") { switchTab("devices") }
-        callsTabBtn = createTabButton("Call Sync", currentTab == "calls") { switchTab("calls") }
+        connectionTabBtn = createTabButton("Connection", currentTab == "connection") { switchTab("connection") }
         clipboardTabBtn = createTabButton("Clipboard", currentTab == "clipboard") { switchTab("clipboard") }
+        filesTabBtn = createTabButton("Files", currentTab == "files") { switchTab("files") }
+        settingsTabBtn = createTabButton("Settings", currentTab == "settings") { switchTab("settings") }
 
-        tabContainer.addView(devicesTabBtn)
-        tabContainer.addView(callsTabBtn)
+        tabContainer.addView(connectionTabBtn)
         tabContainer.addView(clipboardTabBtn)
+        tabContainer.addView(filesTabBtn)
+        tabContainer.addView(settingsTabBtn)
 
         val tabParams = RelativeLayout.LayoutParams(RelativeLayout.LayoutParams.MATCH_PARENT, RelativeLayout.LayoutParams.WRAP_CONTENT).apply {
             addRule(RelativeLayout.BELOW, headerLayout.id)
@@ -223,10 +235,10 @@ class MainActivity : AppCompatActivity() {
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
         }
 
-        // ================= TAB 1: DEVICES =================
-        devicesContainer = LinearLayout(this).apply {
+        // ================= TAB 1: CONNECTION =================
+        connectionContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            visibility = if (currentTab == "devices") View.VISIBLE else View.GONE
+            visibility = if (currentTab == "connection") View.VISIBLE else View.GONE
         }
 
         // Active Connection Status Card
@@ -254,131 +266,221 @@ class MainActivity : AppCompatActivity() {
             text = "Disconnect"
             visibility = View.GONE
             setTypeface(null, Typeface.BOLD)
-            setBackgroundColor(Color.parseColor("#E11D48"))
+            background = getNeobrutalismDrawable(Color.parseColor("#B3261E"), Color.TRANSPARENT, 0, 100f)
             setTextColor(Color.WHITE)
             setOnClickListener {
                 ConnectionService.instance?.disconnect()
-                Toast.makeText(this@MainActivity, "Disconnected from daemon", Toast.LENGTH_SHORT).show()
+                CustomToast.show(this@MainActivity, "Disconnected from daemon", isDarkMode)
                 refreshDiscoveryLists()
             }
         }
         statusCard.addView(disconnectBtn)
-        devicesContainer.addView(statusCard)
-
-        // Wi-Fi Discovery Section (Hide when connected)
-        wifiTitle = createSectionTitle("Discovered Wi-Fi Hosts")
-        devicesContainer.addView(wifiTitle)
-        
-        wifiCard = createCardLayout()
-        wifiDevicesLayout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-        }
-        wifiCard.addView(wifiDevicesLayout)
-        devicesContainer.addView(wifiCard)
-
-        // QR / Manual Pairing Section (Hide when connected)
-        manualTitle = createSectionTitle("Manual Connect")
-        devicesContainer.addView(manualTitle)
-        
-        manualCard = createCardLayout()
-        val scanButton = Button(this).apply {
-            text = "Scan Pairing QR Code"
-            setTypeface(null, Typeface.BOLD)
-            background = getNeobrutalismDrawable(accentColor, getThemeColor(darkBorder, lightBorder), 5)
-            setTextColor(Color.WHITE)
-            setOnClickListener {
-                startQrCodeScanner()
-            }
-        }
-        manualCard.addView(scanButton)
-
-        val separator = TextView(this).apply {
-            text = "— OR MANUALLY ENTER IP —"
-            textSize = 10f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(getThemeColor(darkTextMuted, lightTextMuted))
-            gravity = Gravity.CENTER
-            setPadding(0, 25, 0, 25)
-        }
-        manualCard.addView(separator)
-
-        val pairingInput = EditText(this).apply {
-            hint = "e.g., 192.168.1.112"
-            setHintTextColor(getThemeColor(darkTextMuted, lightTextMuted))
-            setTextColor(getThemeColor(darkText, lightText))
-            textSize = 14f
-            background = getNeobrutalismDrawable(getThemeColor(darkCard, lightCard), getThemeColor(darkBorder, lightBorder), 5)
-            setPadding(25, 25, 25, 25)
-        }
-        manualCard.addView(pairingInput)
-
-        val pairButton = Button(this).apply {
-            text = "Connect Manually"
-            setTypeface(null, Typeface.BOLD)
-            background = getNeobrutalismDrawable(getThemeColor(darkCard, lightCard), getThemeColor(darkBorder, lightBorder), 5)
-            setTextColor(getThemeColor(darkText, lightText))
-            setOnClickListener {
-                val input = pairingInput.text.toString().trim()
-                if (input.isNotEmpty()) {
-                    handleManualPairing(input)
-                }
-            }
-        }
-        manualCard.addView(pairButton, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = 25 })
-        devicesContainer.addView(manualCard)
+        connectionContainer.addView(statusCard)
 
         // Bluetooth Section
-        devicesContainer.addView(createSectionTitle("Bonded Bluetooth Devices"))
+        connectionContainer.addView(createSectionTitle("Bonded Bluetooth Devices"))
         val bluetoothCard = createCardLayout()
         bluetoothDevicesLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
         }
         bluetoothCard.addView(bluetoothDevicesLayout)
-        devicesContainer.addView(bluetoothCard)
+        connectionContainer.addView(bluetoothCard)
 
-        contentLayout.addView(devicesContainer)
+        contentLayout.addView(connectionContainer)
 
-        // ================= TAB 2: CALL SYNC =================
-        callsContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            visibility = if (currentTab == "calls") View.VISIBLE else View.GONE
-        }
-
-        val callControlCard = createCardLayout()
-        val callTitleText = TextView(this).apply {
-            text = "Phone Call Synchronization"
-            textSize = 18f
-            setTextColor(getThemeColor(darkText, lightText))
-            setTypeface(null, Typeface.BOLD)
-            setPadding(0, 0, 0, 15)
-        }
-        callControlCard.addView(callTitleText)
-
-        val callDescText = TextView(this).apply {
-            text = "Relays live phone call alerts (Ringing, Connected, Muted) automatically to the desktop host when active."
-            textSize = 14f
-            setTextColor(getThemeColor(darkTextMuted, lightTextMuted))
-            setPadding(0, 0, 0, 30)
-        }
-        callControlCard.addView(callDescText)
-
-        val callToggle = Switch(this).apply {
-            text = "Enable Call State Mirroring"
-            setTextColor(getThemeColor(darkText, lightText))
-            isChecked = true
-            textSize = 15f
-        }
-        callControlCard.addView(callToggle)
-        callsContainer.addView(callControlCard)
-        contentLayout.addView(callsContainer)
-
-        // ================= TAB 3: CLIPBOARD =================
+        // ================= TAB 2: CLIPBOARD =================
         clipboardContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             visibility = if (currentTab == "clipboard") View.VISIBLE else View.GONE
         }
 
-        // 1. Config Card
+        val clipControlCard = createCardLayout()
+        clipboardStatusText = TextView(this).apply {
+            text = "Shared Clipboard Text: None"
+            textSize = 14f
+            setTextColor(getThemeColor(darkTextMuted, lightTextMuted))
+            setTypeface(null, Typeface.ITALIC)
+            setPadding(0, 0, 0, 30)
+        }
+        clipControlCard.addView(clipboardStatusText)
+
+        clipboardInput = EditText(this).apply {
+            hint = "Type text to send to host clipboard..."
+            setHintTextColor(getThemeColor(darkTextMuted, lightTextMuted))
+            setTextColor(getThemeColor(darkText, lightText))
+            textSize = 14f
+            background = getNeobrutalismDrawable(getThemeColor(darkCard, lightCard), getThemeColor(darkBorder, lightBorder), 5, 36f)
+            setPadding(25, 25, 25, 25)
+        }
+        clipControlCard.addView(clipboardInput)
+
+        val syncClipBtn = Button(this).apply {
+            text = "Send to PC Clipboard"
+            setTypeface(null, Typeface.BOLD)
+            background = getNeobrutalismDrawable(successColor, getThemeColor(darkBorder, lightBorder), 5, 100f)
+            setTextColor(Color.WHITE)
+            setOnClickListener {
+                val text = clipboardInput.text.toString()
+                if (text.isNotEmpty()) {
+                    syncClipboard(text)
+                    clipboardInput.setText("")
+                }
+            }
+        }
+        clipControlCard.addView(syncClipBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = 25 })
+        clipboardContainer.addView(clipControlCard)
+        contentLayout.addView(clipboardContainer)
+
+        // ================= TAB: FILES =================
+        filesContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = if (currentTab == "files") View.VISIBLE else View.GONE
+        }
+
+        if (!checkStoragePermission()) {
+            val permCard = createCardLayout()
+            val promptText = TextView(this).apply {
+                text = "Storage access is required to share files with the PC. Please grant permission."
+                setTextColor(getThemeColor(darkTextMuted, lightTextMuted))
+                textSize = 14f
+                setPadding(20, 20, 20, 20)
+            }
+            val grantBtn = Button(this).apply {
+                text = "Grant Storage Permission"
+                textSize = 12f
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(Color.WHITE)
+                background = getNeobrutalismDrawable(accentColor, getThemeColor(darkBorder, lightBorder), 5)
+                setOnClickListener {
+                    requestStoragePermission()
+                }
+            }
+            permCard.addView(promptText)
+            permCard.addView(grantBtn)
+            filesContainer.addView(permCard)
+        } else {
+            val filesCard = createCardLayout()
+            
+            val filesHeader = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(10, 10, 10, 20)
+            }
+            
+            val upBtn = Button(this).apply {
+                text = "◀ UP"
+                textSize = 12f
+                setTypeface(null, Typeface.BOLD)
+                setPadding(20, 10, 20, 10)
+                setTextColor(Color.WHITE)
+                background = getNeobrutalismDrawable(accentColor, getThemeColor(darkBorder, lightBorder), 5)
+                setOnClickListener {
+                    if (currentPcPath.isNotEmpty() && currentPcPath != "/" && currentPcPath.contains("/")) {
+                        val parent = currentPcPath.substringBeforeLast("/")
+                        val target = if (parent.isEmpty()) "/" else parent
+                        fetchPcFiles(target)
+                    }
+                }
+            }
+            
+            val pathText = TextView(this).apply {
+                text = if (currentPcPath.isEmpty()) "PC Home Directory" else currentPcPath
+                setTextColor(getThemeColor(darkText, lightText))
+                setTypeface(null, Typeface.BOLD)
+                textSize = 14f
+                setPadding(25, 0, 0, 0)
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                ellipsize = android.text.TextUtils.TruncateAt.START
+                isSingleLine = true
+            }
+            
+            filesHeader.addView(upBtn)
+            filesHeader.addView(pathText)
+            filesCard.addView(filesHeader)
+            
+            val filesListLayout = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+            }
+            
+            if (pcFilesList.length() == 0) {
+                val emptyText = TextView(this).apply {
+                    text = "Tap to load PC files or connect to PC."
+                    setTextColor(getThemeColor(darkTextMuted, lightTextMuted))
+                    textSize = 13f
+                    gravity = Gravity.CENTER
+                    setPadding(0, 40, 0, 40)
+                    setOnClickListener {
+                        fetchPcFiles(currentPcPath)
+                    }
+                }
+                filesListLayout.addView(emptyText)
+            } else {
+                for (i in 0 until pcFilesList.length()) {
+                    val item = pcFilesList.getJSONObject(i)
+                    val name = item.getString("name")
+                    val isDir = item.getBoolean("is_dir")
+                    val path = item.getString("path")
+                    val size = item.getLong("size")
+                    
+                    val itemRow = LinearLayout(this).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                        setPadding(20, 25, 20, 25)
+                        background = getNeobrutalismDrawable(Color.TRANSPARENT, getThemeColor(darkBorder, lightBorder), 1)
+                        setOnClickListener {
+                            if (isDir) {
+                                fetchPcFiles(path)
+                            } else {
+                                downloadPcFile(path, name)
+                            }
+                        }
+                    }
+                    
+                    val iconView = TextView(this).apply {
+                        text = if (isDir) "📁" else "📄"
+                        textSize = 18f
+                        setPadding(0, 0, 20, 0)
+                    }
+                    
+                    val infoLayout = LinearLayout(this).apply {
+                        orientation = LinearLayout.VERTICAL
+                        layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                    }
+                    
+                    val nameView = TextView(this).apply {
+                        text = name
+                        setTextColor(getThemeColor(darkText, lightText))
+                        textSize = 14f
+                        setTypeface(null, Typeface.BOLD)
+                    }
+                    
+                    val sizeView = TextView(this).apply {
+                        text = if (isDir) "Folder" else "${size / 1024} KB"
+                        setTextColor(getThemeColor(darkTextMuted, lightTextMuted))
+                        textSize = 11f
+                    }
+                    
+                    infoLayout.addView(nameView)
+                    infoLayout.addView(sizeView)
+                    
+                    itemRow.addView(iconView)
+                    itemRow.addView(infoLayout)
+                    filesListLayout.addView(itemRow)
+                }
+            }
+            
+            filesCard.addView(filesListLayout)
+            filesContainer.addView(filesCard)
+        }
+        contentLayout.addView(filesContainer)
+
+        // ================= TAB 3: SETTINGS =================
+        settingsContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = if (currentTab == "settings") View.VISIBLE else View.GONE
+        }
+
+        // Clipboard Configuration Card
         val clipConfigCard = createCardLayout()
         val configTitle = TextView(this).apply {
             text = "Clipboard Sync Options"
@@ -412,7 +514,7 @@ class MainActivity : AppCompatActivity() {
         clipConfigCard.addView(directionLabel)
 
         val spinnerContainer = FrameLayout(this).apply {
-            background = getNeobrutalismDrawable(getThemeColor(darkCard, lightCard), getThemeColor(darkBorder, lightBorder), 5)
+            background = getNeobrutalismDrawable(getThemeColor(darkCard, lightCard), getThemeColor(darkBorder, lightBorder), 5, 36f)
             setPadding(10, 5, 10, 5)
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
                 bottomMargin = 20
@@ -444,81 +546,131 @@ class MainActivity : AppCompatActivity() {
             }
             this.adapter = adapter
             
-            val selectionIndex = when(currentDirection) {
+            val initialPos = when (currentDirection) {
                 "bidirectional" -> 0
                 "desktop_to_mobile" -> 1
                 "mobile_to_desktop" -> 2
                 else -> 0
             }
-            setSelection(selectionIndex)
+            setSelection(initialPos)
+
+            onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(parent: AdapterView<*>?, view: View?, pos: Int, id: Long) {
+                    val dir = when (pos) {
+                        0 -> "bidirectional"
+                        1 -> "desktop_to_mobile"
+                        2 -> "mobile_to_desktop"
+                        else -> "bidirectional"
+                    }
+                    saveClipboardConfig(dir, autoSyncSwitch.isChecked)
+                }
+                override fun onNothingSelected(parent: AdapterView<*>?) {}
+            }
         }
         spinnerContainer.addView(directionSpinner)
         clipConfigCard.addView(spinnerContainer)
 
         autoSyncSwitch.setOnCheckedChangeListener { _, isChecked ->
-            val dirIndex = directionSpinner.selectedItemPosition
-            val dirValue = when(dirIndex) {
+            val dir = when (directionSpinner.selectedItemPosition) {
                 0 -> "bidirectional"
                 1 -> "desktop_to_mobile"
                 2 -> "mobile_to_desktop"
                 else -> "bidirectional"
             }
-            saveClipboardConfig(dirValue, isChecked)
+            saveClipboardConfig(dir, isChecked)
         }
+        settingsContainer.addView(clipConfigCard)
 
-        directionSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                val isChecked = autoSyncSwitch.isChecked
-                val dirValue = when(position) {
-                    0 -> "bidirectional"
-                    1 -> "desktop_to_mobile"
-                    2 -> "mobile_to_desktop"
-                    else -> "bidirectional"
-                }
-                saveClipboardConfig(dirValue, isChecked)
-            }
-
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        // Call Mirroring Configuration Card
+        val callControlCard = createCardLayout()
+        val callTitleText = TextView(this).apply {
+            text = "Phone Call Synchronization"
+            textSize = 16f
+            setTextColor(getThemeColor(darkText, lightText))
+            setTypeface(null, Typeface.BOLD)
+            setPadding(0, 0, 0, 15)
         }
-        clipboardContainer.addView(clipConfigCard)
+        callControlCard.addView(callTitleText)
 
-        // 2. Control Card (Send/Status)
-        val clipControlCard = createCardLayout()
-        clipboardStatusText = TextView(this).apply {
-            text = "Shared Clipboard Text: None"
-            textSize = 14f
+        val callDescText = TextView(this).apply {
+            text = "Relays live phone call alerts (Ringing, Connected, Muted) automatically to the desktop host when active."
+            textSize = 13f
             setTextColor(getThemeColor(darkTextMuted, lightTextMuted))
-            setTypeface(null, Typeface.ITALIC)
-            setPadding(0, 0, 0, 30)
+            setPadding(0, 0, 0, 20)
         }
-        clipControlCard.addView(clipboardStatusText)
+        callControlCard.addView(callDescText)
 
-        clipboardInput = EditText(this).apply {
-            hint = "Type text to send to host clipboard..."
+        val callToggle = Switch(this).apply {
+            text = "Enable Call State Mirroring"
+            setTextColor(getThemeColor(darkText, lightText))
+            isChecked = true
+            textSize = 14f
+        }
+        callControlCard.addView(callToggle)
+        settingsContainer.addView(callControlCard)
+
+        // Wi-Fi Setup Cards
+        wifiTitle = createSectionTitle("Discovered Wi-Fi Hosts")
+        settingsContainer.addView(wifiTitle)
+        
+        wifiCard = createCardLayout()
+        wifiDevicesLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        wifiCard.addView(wifiDevicesLayout)
+        settingsContainer.addView(wifiCard)
+
+        manualTitle = createSectionTitle("Manual Configuration")
+        settingsContainer.addView(manualTitle)
+        
+        manualCard = createCardLayout()
+        val scanButton = Button(this).apply {
+            text = "Scan Pairing QR Code"
+            setTypeface(null, Typeface.BOLD)
+            background = getNeobrutalismDrawable(accentColor, getThemeColor(darkBorder, lightBorder), 5, 100f)
+            setTextColor(if (isDarkMode) Color.parseColor("#062E6F") else Color.WHITE)
+            setOnClickListener {
+                startQrCodeScanner()
+            }
+        }
+        manualCard.addView(scanButton)
+
+        val separator = TextView(this).apply {
+            text = "— OR MANUALLY ENTER IP —"
+            textSize = 10f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(getThemeColor(darkTextMuted, lightTextMuted))
+            gravity = Gravity.CENTER
+            setPadding(0, 25, 0, 25)
+        }
+        manualCard.addView(separator)
+
+        val pairingInput = EditText(this).apply {
+            hint = "e.g., 192.168.1.112"
             setHintTextColor(getThemeColor(darkTextMuted, lightTextMuted))
             setTextColor(getThemeColor(darkText, lightText))
             textSize = 14f
-            background = getNeobrutalismDrawable(getThemeColor(darkCard, lightCard), getThemeColor(darkBorder, lightBorder), 5)
+            background = getNeobrutalismDrawable(getThemeColor(darkCard, lightCard), getThemeColor(darkBorder, lightBorder), 5, 36f)
             setPadding(25, 25, 25, 25)
         }
-        clipControlCard.addView(clipboardInput)
+        manualCard.addView(pairingInput)
 
-        val syncClipBtn = Button(this).apply {
-            text = "Send to PC Clipboard"
+        val pairButton = Button(this).apply {
+            text = "Connect Manually"
             setTypeface(null, Typeface.BOLD)
-            background = getNeobrutalismDrawable(successColor, getThemeColor(darkBorder, lightBorder), 5)
-            setTextColor(Color.WHITE)
+            background = getNeobrutalismDrawable(getThemeColor(darkCard, lightCard), getThemeColor(darkBorder, lightBorder), 5, 100f)
+            setTextColor(getThemeColor(darkText, lightText))
             setOnClickListener {
-                val text = clipboardInput.text.toString()
-                if (text.isNotEmpty()) {
-                    syncClipboard(text)
-                    clipboardInput.setText("")
+                val input = pairingInput.text.toString().trim()
+                if (input.isNotEmpty()) {
+                    handleManualPairing(input)
                 }
             }
         }
-        clipControlCard.addView(syncClipBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = 25 })
-        clipboardContainer.addView(clipControlCard)
-        contentLayout.addView(clipboardContainer)
+        manualCard.addView(pairButton, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = 25 })
+        settingsContainer.addView(manualCard)
+
+        contentLayout.addView(settingsContainer)
 
         scrollView.addView(contentLayout)
         rootLayout.addView(scrollView, scrollParams)
@@ -675,7 +827,7 @@ class MainActivity : AppCompatActivity() {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
                     setPadding(25, 25, 25, 25)
-                    background = getNeobrutalismDrawable(getThemeColor(darkBg, lightBg), getThemeColor(darkBorder, lightBorder), 4)
+                    background = getNeobrutalismDrawable(getThemeColor(darkBg, lightBg), getThemeColor(darkBorder, lightBorder), 4, 36f)
                     layoutParams = LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.MATCH_PARENT,
                         LinearLayout.LayoutParams.WRAP_CONTENT
@@ -695,7 +847,7 @@ class MainActivity : AppCompatActivity() {
                     text = "Connect"
                     textSize = 10f
                     setTypeface(null, Typeface.BOLD)
-                    background = getNeobrutalismDrawable(successColor, getThemeColor(darkBorder, lightBorder), 4)
+                    background = getNeobrutalismDrawable(successColor, getThemeColor(darkBorder, lightBorder), 4, 100f)
                     setTextColor(Color.WHITE)
                     setOnClickListener {
                         triggerServiceConnect(ip)
@@ -746,12 +898,7 @@ class MainActivity : AppCompatActivity() {
                 val selectedMac = sharedPrefs.getString("selected_bluetooth_mac", null)
 
                 for (device in pairedDevices) {
-                    val isDeviceConnected = try {
-                        val method = device.javaClass.getMethod("isConnected")
-                        method.invoke(device) as Boolean
-                    } catch (e: Exception) {
-                        false
-                    }
+                    val isDeviceConnected = ConnectionService.instance?.isBluetoothDeviceConnected(device.address) ?: false
 
                     val isSelected = device.address == selectedMac
 
@@ -764,7 +911,7 @@ class MainActivity : AppCompatActivity() {
                         } else {
                             getThemeColor(darkBg, lightBg)
                         }
-                        background = getNeobrutalismDrawable(bgCol, getThemeColor(darkBorder, lightBorder), 4)
+                        background = getNeobrutalismDrawable(bgCol, getThemeColor(darkBorder, lightBorder), 4, 36f)
                         layoutParams = LinearLayout.LayoutParams(
                             LinearLayout.LayoutParams.MATCH_PARENT, 
                             LinearLayout.LayoutParams.WRAP_CONTENT
@@ -799,8 +946,8 @@ class MainActivity : AppCompatActivity() {
                         } else {
                             accentColor
                         }
-                        background = getNeobrutalismDrawable(btnBg, getThemeColor(darkBorder, lightBorder), 4)
-                        setTextColor(if (isSelected) getThemeColor(darkText, lightText) else Color.WHITE)
+                        background = getNeobrutalismDrawable(btnBg, getThemeColor(darkBorder, lightBorder), 4, 100f)
+                        setTextColor(if (isSelected) getThemeColor(darkText, lightText) else if (isDarkMode) Color.parseColor("#062E6F") else Color.WHITE)
                         setOnClickListener {
                             if (isSelected) {
                                 sharedPrefs.edit()
@@ -910,7 +1057,158 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun checkStoragePermission(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            android.os.Environment.isExternalStorageManager()
+        } else {
+            val readPerm = ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE)
+            val writePerm = ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            readPerm == PackageManager.PERMISSION_GRANTED && writePerm == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    private fun requestStoragePermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                val intent = Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                    data = android.net.Uri.parse("package:$packageName")
+                }
+                startActivity(intent)
+            } catch (e: Exception) {
+                val intent = Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                startActivity(intent)
+            }
+        } else {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE),
+                STORAGE_PERMISSION_CODE
+            )
+        }
+    }
+
+    private fun fetchPcFiles(path: String) {
+        val sharedPrefs = getSharedPreferences("platypusd_prefs", Context.MODE_PRIVATE)
+        val ip = sharedPrefs.getString("paired_host_ip", null)
+        val port = sharedPrefs.getInt("paired_host_port", 8080)
+        
+        if (ip == null) {
+            Toast.makeText(this, "Not connected to PC daemon", Toast.LENGTH_SHORT).show()
+            return
+        }
+        
+        val url = "http://$ip:$port/api/v1/files/list?path=${java.net.URLEncoder.encode(path, "UTF-8")}"
+        val request = okhttp3.Request.Builder().url(url).build()
+        val client = okhttp3.OkHttpClient()
+        
+        client.newCall(request).enqueue(object : okhttp3.Callback {
+            override fun onFailure(call: okhttp3.Call, e: java.io.IOException) {
+                runOnUiThread {
+                    Toast.makeText(this@MainActivity, "Failed to list files: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+
+            override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
+                response.use {
+                    if (response.isSuccessful) {
+                        val bodyStr = response.body?.string() ?: "[]"
+                        runOnUiThread {
+                            pcFilesList = org.json.JSONArray(bodyStr)
+                            currentPcPath = path
+                            initLayout()
+                        }
+                    } else {
+                        runOnUiThread {
+                            Toast.makeText(this@MainActivity, "Server error: ${response.code}", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+            }
+        })
+    }
+
+    private fun downloadPcFile(path: String, fileName: String) {
+        val sharedPrefs = getSharedPreferences("platypusd_prefs", Context.MODE_PRIVATE)
+        val ip = sharedPrefs.getString("paired_host_ip", null)
+        val port = sharedPrefs.getInt("paired_host_port", 8080)
+        
+        if (ip == null) return
+        
+        val url = "http://$ip:$port/api/v1/files/download?path=${java.net.URLEncoder.encode(path, "UTF-8")}"
+        val request = okhttp3.Request.Builder().url(url).build()
+        val client = okhttp3.OkHttpClient()
+        
+        Toast.makeText(this, "Downloading $fileName...", Toast.LENGTH_SHORT).show()
+        
+        client.newCall(request).enqueue(object : okhttp3.Callback {
+            override fun onFailure(call: okhttp3.Call, e: java.io.IOException) {
+                runOnUiThread {
+                    Toast.makeText(this@MainActivity, "Download failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+
+            override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
+                response.use {
+                    if (response.isSuccessful) {
+                        try {
+                            val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+                            val destFile = java.io.File(downloadsDir, fileName)
+                            response.body?.byteStream()?.use { input ->
+                                destFile.outputStream().use { output ->
+                                    input.copyTo(output)
+                                }
+                            }
+                            runOnUiThread {
+                                Toast.makeText(this@MainActivity, "Downloaded to Downloads/$fileName", Toast.LENGTH_LONG).show()
+                            }
+                        } catch (e: Exception) {
+                            runOnUiThread {
+                                Toast.makeText(this@MainActivity, "Failed to save file: ${e.message}", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    } else {
+                        runOnUiThread {
+                            Toast.makeText(this@MainActivity, "Server error: ${response.code}", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+            }
+        })
+    }
+
     companion object {
         var instance: MainActivity? = null
+    }
+}
+
+object CustomToast {
+    fun show(context: android.content.Context, message: String, isDarkMode: Boolean) {
+        val toast = android.widget.Toast(context)
+        val layout = android.widget.LinearLayout(context).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            setPadding(40, 20, 40, 20)
+            
+            val bgCol = if (isDarkMode) Color.parseColor("#E6E1E5") else Color.parseColor("#1D1B20")
+            val drawable = android.graphics.drawable.GradientDrawable().apply {
+                shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+                setColor(bgCol)
+                cornerRadius = 100f
+            }
+            background = drawable
+        }
+        
+        val text = android.widget.TextView(context).apply {
+            setText(message)
+            val textCol = if (isDarkMode) Color.parseColor("#1D1B20") else Color.parseColor("#E6E1E5")
+            setTextColor(textCol)
+            textSize = 14f
+            typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
+        }
+        layout.addView(text)
+        
+        toast.view = layout
+        toast.duration = android.widget.Toast.LENGTH_SHORT
+        toast.show()
     }
 }

@@ -6,6 +6,8 @@ interface PairedDevice {
   device_name: string;
   is_online: boolean;
   is_bluetooth_connected: boolean;
+  connection_type?: string;
+  ip?: string;
 }
 
 interface ActiveCall {
@@ -33,9 +35,70 @@ export default function App() {
   const [clipboardInput, setClipboardInput] = useState<string>('');
   const [isDaemonOnline, setIsDaemonOnline] = useState<boolean>(false);
   const [qrCodeUrl, setQrCodeUrl] = useState<string>('');
-  const [activeTab, setActiveTab] = useState<string>('devices');
+  const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [clipDirection, setClipDirection] = useState<string>('bidirectional');
   const [clipAutoSync, setClipAutoSync] = useState<boolean>(true);
+
+  // Files explorer state
+  const [mobilePath, setMobilePath] = useState<string>('');
+  const [mobileFiles, setMobileFiles] = useState<any[]>([]);
+  const [pcPath, setPcPath] = useState<string>('');
+  const [pcFiles, setPcFiles] = useState<any[]>([]);
+  const [loadingMobile, setLoadingMobile] = useState<boolean>(false);
+  const [loadingPc, setLoadingPc] = useState<boolean>(false);
+
+  const fetchPcFilesList = async (targetPath: string) => {
+    setLoadingPc(true);
+    try {
+      const url = `http://localhost:8080/api/v1/files/list?path=${encodeURIComponent(targetPath)}`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        setPcFiles(data);
+        setPcPath(targetPath);
+      } else {
+        console.error("Failed to fetch PC files:", res.statusText);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoadingPc(false);
+    }
+  };
+
+  const fetchMobileFilesList = async (targetPath: string) => {
+    const connected = status?.paired_devices.filter(d => d.is_online) || [];
+    if (!connected.length || !connected[0].ip) {
+      return;
+    }
+    const phoneIp = connected[0].ip;
+    setLoadingMobile(true);
+    try {
+      const url = `http://${phoneIp}:9090/list?path=${encodeURIComponent(targetPath)}`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        setMobileFiles(data);
+        setMobilePath(targetPath);
+      } else {
+        console.error("Failed to fetch mobile files:", res.statusText);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoadingMobile(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'files') {
+      fetchPcFilesList(pcPath || '/home/saravana');
+      const connected = status?.paired_devices.filter(d => d.is_online) || [];
+      if (connected.length && connected[0].ip) {
+        fetchMobileFilesList(mobilePath || '');
+      }
+    }
+  }, [activeTab, status]);
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
 
   const fetchClipboardConfig = async () => {
@@ -251,19 +314,17 @@ export default function App() {
   
   // Identify if active device is connected over Bluetooth
   const isBluetoothConnected = connectedDevices.some(d => d.is_bluetooth_connected);
-
   return (
     <div className={`theme-root ${theme}-mode`}>
       <div className="container">
         <header>
-          <h1>platypusd dashboard</h1>
+          <h1>platypusd platform</h1>
           <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
             <button 
-              className="btn btn-secondary" 
+              className="btn btn-secondary btn-sm" 
               onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
-              style={{ fontSize: '0.8rem', padding: '0.5rem 1rem' }}
             >
-              {theme === 'light' ? 'Dark Mode' : 'Light Mode'}
+              {theme === 'light' ? 'Dark Theme' : 'Light Theme'}
             </button>
             <div className={`status-badge ${isDaemonOnline ? 'online' : 'offline'}`}>
               <span style={{ 
@@ -282,27 +343,33 @@ export default function App() {
         {/* Dashboard Tabs */}
         <div className="tab-bar">
           <button 
-            className={`tab-btn ${activeTab === 'devices' ? 'active' : ''}`} 
-            onClick={() => setActiveTab('devices')}
+            className={`tab-btn ${activeTab === 'dashboard' ? 'active' : ''}`} 
+            onClick={() => setActiveTab('dashboard')}
           >
-            Devices {status && status.paired_devices.length > 0 ? `(${status.paired_devices.filter(d => d.is_online).length}/${status.paired_devices.length} Connected)` : ''}
+            Dashboard
           </button>
           <button 
             className={`tab-btn ${activeTab === 'clipboard' ? 'active' : ''}`} 
             onClick={() => setActiveTab('clipboard')}
           >
-            Clipboard Sync {status && (hasConnectedDevices ? 'Active' : 'Offline')}
+            Clipboard Sync
           </button>
           <button 
-            className={`tab-btn ${activeTab === 'calls' ? 'active' : ''}`} 
-            onClick={() => setActiveTab('calls')}
+            className={`tab-btn ${activeTab === 'files' ? 'active' : ''}`} 
+            onClick={() => setActiveTab('files')}
           >
-            Call Sync {status && (hasConnectedDevices ? 'Active' : 'Offline')}
+            File Explorer
+          </button>
+          <button 
+            className={`tab-btn ${activeTab === 'settings' ? 'active' : ''}`} 
+            onClick={() => setActiveTab('settings')}
+          >
+            Settings
           </button>
         </div>
 
         {error && !isDaemonOnline && (
-          <div className="card" style={{ borderColor: 'var(--danger)', background: 'rgba(244, 63, 94, 0.05)' }}>
+          <div className="card" style={{ borderColor: 'var(--danger)', backgroundColor: 'var(--danger-container)' }}>
             <h2 style={{ color: 'var(--danger)' }}>Connection Error</h2>
             <p>{error}</p>
             <button className="btn btn-secondary" style={{ marginTop: '1rem' }} onClick={fetchStatus}>
@@ -311,324 +378,14 @@ export default function App() {
           </div>
         )}
 
-        {/* Conditionally rendering call banners if call active and not in Calls tab to preserve alerts */}
-        {activeCall && activeTab !== 'calls' && (
-          <div className="call-banner" style={{ marginBottom: '1.5rem' }}>
-            <div className="call-info">
-              <span className="call-title">Active Phone Call Alert ({activeCall.state})</span>
-              <span className="caller-name">{activeCall.contact_name}</span>
-              <span className="caller-number">{activeCall.number}</span>
-            </div>
-            <div className="call-actions">
-              {activeCall.state === 'Ringing' && (
-                <>
-                  <button className="btn btn-success" onClick={() => sendCallAction('accept', activeCall.call_id)}>Accept</button>
-                  <button className="btn btn-danger" onClick={() => sendCallAction('reject', activeCall.call_id)}>Decline</button>
-                </>
-              )}
-              {(activeCall.state === 'Connected' || activeCall.state === 'Muted') && (
-                <>
-                  {activeCall.state === 'Muted' ? (
-                    <button className="btn btn-primary" onClick={() => sendCallAction('unmute', activeCall.call_id)}>Unmute</button>
-                  ) : (
-                    <button className="btn btn-secondary" onClick={() => sendCallAction('mute', activeCall.call_id)}>Mute</button>
-                  )}
-                  <button className="btn btn-danger" onClick={() => sendCallAction('reject', activeCall.call_id)}>Hang Up</button>
-                </>
-              )}
-            </div>
-          </div>
-        )}
-
         {status && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
             
-            {activeTab === 'devices' && (
+            {activeTab === 'dashboard' && (
               <>
-                {/* System Identity & Connectivity Status */}
-                <div className="card" style={{ display: 'flex', gap: '1.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                  <div style={{ flexGrow: 1, minWidth: '250px' }}>
-                    <h2>System Identity</h2>
-                    <div style={{ display: 'grid', gridTemplateColumns: '150px 1fr', gap: '0.75rem', fontSize: '0.95rem', marginBottom: '1rem' }}>
-                      <span style={{ color: 'var(--text-muted)', fontWeight: 'bold' }}>Device Name:</span>
-                      <strong>{status.device_name}</strong>
-                      <span style={{ color: 'var(--text-muted)', fontWeight: 'bold' }}>Device ID:</span>
-                      <code>{status.device_id}</code>
-                      <span style={{ color: 'var(--text-muted)', fontWeight: 'bold' }}>Public Key:</span>
-                      <code style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {status.public_key}
-                      </code>
-                    </div>
-
-                    <h2>Connectivity Status</h2>
-                    <div style={{ display: 'grid', gridTemplateColumns: '150px 1fr', gap: '0.75rem', fontSize: '0.95rem' }}>
-                      <span style={{ color: 'var(--text-muted)', fontWeight: 'bold' }}>Wi-Fi Status:</span>
-                      <strong style={{ color: hasConnectedDevices ? 'var(--success)' : 'var(--danger)' }}>
-                        {hasConnectedDevices 
-                          ? `Connected (${connectedDevices[0].device_name})` 
-                          : 'Disconnected (Waiting for connection...)'
-                        }
-                      </strong>
-                      <span style={{ color: 'var(--text-muted)', fontWeight: 'bold' }}>Bluetooth Status:</span>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
-                        {isBluetoothConnected ? (
-                          <>
-                            <strong style={{ color: 'var(--success)' }}>Connected (Audio gateway active)</strong>
-                            <button 
-                              className="btn btn-danger" 
-                              style={{ padding: '0.25rem 0.75rem', fontSize: '0.75rem', border: 'none', height: 'auto', minHeight: 'unset', boxShadow: 'none' }}
-                              onClick={() => {
-                                const devWithBt = status.paired_devices.find(d => d.is_bluetooth_connected);
-                                if (devWithBt) {
-                                  disconnectBluetooth(devWithBt.device_id);
-                                }
-                              }}
-                            >
-                              Disconnect Bluetooth
-                            </button>
-                          </>
-                        ) : (
-                          <>
-                            <strong style={{ color: 'var(--text-muted)' }}>Disconnected</strong>
-                            <button 
-                              className="btn btn-secondary" 
-                              style={{ padding: '0.25rem 0.75rem', fontSize: '0.75rem', border: '3px solid var(--border-color)', height: 'auto', minHeight: 'unset', boxShadow: 'none' }}
-                              onClick={openBluetoothSettings}
-                            >
-                              Open Settings to Connect
-                            </button>
-                          </>
-                        )}
-                      </div>
-
-                    </div>
-                  </div>
-                </div>
-
-                {/* Wi-Fi Setup QR Code (Hidden when connected) */}
-                {!hasConnectedDevices && (
-                  <div className="card" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem' }}>
-                    <h2>Wi-Fi Pairing Configuration</h2>
-                    <p style={{ textAlign: 'center', color: 'var(--text-muted)', maxWidth: '500px', fontSize: '0.95rem' }}>
-                      To sync clipboards and calls over Wi-Fi, open the platypusd app on your mobile device and scan this QR code.
-                    </p>
-                    {qrCodeUrl ? (
-                      <div style={{ background: '#fff', padding: '1rem', border: '3px solid var(--border-color)' }}>
-                        <img src={qrCodeUrl} alt="Pairing QR Code" style={{ width: '180px', height: '180px', display: 'block' }} />
-                      </div>
-                    ) : (
-                      <p>Generating pairing configurations...</p>
-                    )}
-                  </div>
-                )}
-
-                {/* Paired Devices List */}
-                <div className="card">
-                  <h2>Paired Devices</h2>
-                  {status.paired_devices.length === 0 ? (
-                    <p style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>
-                      No paired devices found. Discoverable locally as {status.device_name} via mDNS.
-                    </p>
-                  ) : (
-                    <div className="device-grid">
-                      {status.paired_devices.map((dev) => (
-                        <div key={dev.device_id} className="device-card">
-                          <div>
-                            <div className="device-name">{dev.device_name}</div>
-                            <div className="device-id">{dev.device_id}</div>
-                          </div>
-                          <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-                            <span className={`status-badge ${dev.is_online ? 'online' : 'offline'}`} style={{ boxShadow: 'none', border: '2px solid var(--border-color)', padding: '0.2rem 0.5rem', fontSize: '0.75rem' }}>
-                              {dev.is_online ? 'Online' : 'Offline'}
-                            </span>
-                            <span className={`status-badge ${dev.is_bluetooth_connected ? 'online' : ''}`} style={{ 
-                              boxShadow: 'none', 
-                              border: '2px solid var(--border-color)', 
-                              padding: '0.2rem 0.5rem', 
-                              fontSize: '0.75rem',
-                              color: dev.is_bluetooth_connected ? 'var(--success)' : 'var(--text-muted)',
-                              backgroundColor: dev.is_bluetooth_connected ? 'rgba(16, 185, 129, 0.1)' : 'transparent'
-                            }}>
-                              Bluetooth: {dev.is_bluetooth_connected ? 'Connected' : 'Disconnected'}
-                            </span>
-                            {dev.is_bluetooth_connected ? (
-                              <button 
-                                className="btn btn-secondary" 
-                                style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem', border: '3px solid var(--border-color)', cursor: 'pointer', height: 'auto', minHeight: 'unset', boxShadow: 'none' }}
-                                onClick={() => disconnectBluetooth(dev.device_id)}
-                              >
-                                Disconnect BT
-                              </button>
-                            ) : (
-                              <button 
-                                className="btn btn-secondary" 
-                                style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem', border: '3px solid var(--border-color)', cursor: 'pointer', height: 'auto', minHeight: 'unset', boxShadow: 'none' }}
-                                onClick={openBluetoothSettings}
-                              >
-                                Connect BT
-                              </button>
-                            )}
-                            <button 
-                              className="btn btn-danger" 
-                              style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem', border: 'none', cursor: 'pointer', height: 'auto', minHeight: 'unset', boxShadow: 'none' }}
-                              onClick={() => unpairDevice(dev.device_id)}
-                            >
-                              Unpair
-                            </button>
-
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </>
-            )}
-
-            {activeTab === 'clipboard' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-                <div className="card">
-                  <h2>Clipboard Sync Settings</h2>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', marginTop: '1rem' }}>
-                    
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                      <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)', fontWeight: 'bold' }}>Sync Mode / Direction</span>
-                      <select 
-                        value={clipDirection} 
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setClipDirection(val);
-                          saveClipboardConfig(val, clipAutoSync);
-                        }}
-                        style={{
-                          background: 'var(--bg-secondary)',
-                          border: '3px solid var(--border-color)',
-                          padding: '0.75rem',
-                          color: 'var(--text-main)',
-                          fontSize: '0.95rem',
-                          outline: 'none',
-                          cursor: 'pointer',
-                          fontWeight: 'bold'
-                        }}
-                      >
-                        <option value="bidirectional">Bidirectional (Sync both ways)</option>
-                        <option value="desktop_to_mobile">Desktop to Mobile Only</option>
-                        <option value="mobile_to_desktop">Mobile to Desktop Only</option>
-                      </select>
-                    </div>
-
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginTop: '0.25rem' }}>
-                      <input 
-                        type="checkbox" 
-                        id="auto-sync-checkbox"
-                        checked={clipAutoSync}
-                        onChange={(e) => {
-                          const checked = e.target.checked;
-                          setClipAutoSync(checked);
-                          saveClipboardConfig(clipDirection, checked);
-                        }}
-                        style={{
-                          width: '18px',
-                          height: '18px',
-                          cursor: 'pointer',
-                          accentColor: 'var(--accent)'
-                        }}
-                      />
-                      <label htmlFor="auto-sync-checkbox" style={{ fontSize: '0.95rem', cursor: 'pointer', userSelect: 'none', fontWeight: 'bold' }}>
-                        Automatically sync copies in real-time
-                      </label>
-                    </div>
-
-                  </div>
-                </div>
-
-                <div className="card">
-                  <h2>Live Clipboard Synchronizer</h2>
-                  {!hasConnectedDevices ? (
-                    <div style={{
-                      background: 'rgba(244, 63, 94, 0.05)',
-                      border: '3px solid var(--danger)',
-                      padding: '1.25rem',
-                      marginTop: '1rem',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '0.75rem'
-                    }}>
-                      <h3 style={{ margin: 0, color: 'var(--danger)', textTransform: 'uppercase' }}>Device Disconnected</h3>
-                      <p style={{ margin: 0, fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-                        No mobile devices are currently connected. Please open the platypusd app on your mobile device and connect to this PC to sync your clipboard.
-                      </p>
-                      <button className="btn btn-primary" style={{ alignSelf: 'flex-start' }} onClick={() => setActiveTab('devices')}>
-                        Pair / Connect Device
-                      </button>
-                    </div>
-                  ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '0.5rem' }}>
-                      {lastClipboard && (
-                        <div style={{
-                          background: 'rgba(255, 255, 255, 0.04)',
-                          padding: '1rem',
-                          borderLeft: '4px solid var(--accent)',
-                          fontSize: '0.95rem'
-                        }}>
-                          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.25rem', textTransform: 'uppercase', fontWeight: 'bold' }}>
-                            Active Shared Clipboard:
-                          </div>
-                          <code style={{ wordBreak: 'break-all', whiteSpace: 'pre-wrap' }}>{lastClipboard}</code>
-                        </div>
-                      )}
-                      
-                      <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
-                        <input 
-                          type="text" 
-                          placeholder="Type text to sync to all device clipboards..." 
-                          value={clipboardInput}
-                          onChange={(e) => setClipboardInput(e.target.value)}
-                          onKeyDown={(e) => e.key === 'Enter' && pushClipboard()}
-                          style={{
-                            flexGrow: 1,
-                            background: 'var(--bg-secondary)',
-                            border: '3px solid var(--border-color)',
-                            padding: '0.75rem',
-                            color: 'var(--text-main)',
-                            fontSize: '0.95rem',
-                            outline: 'none',
-                            fontWeight: 'bold'
-                          }}
-                        />
-                        <button className="btn btn-primary" onClick={pushClipboard}>
-                          Sync
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {activeTab === 'calls' && (
-              <div className="card">
-                <h2>Call Control Integration</h2>
-                {!hasConnectedDevices ? (
-                  <div style={{
-                    background: 'rgba(244, 63, 94, 0.05)',
-                    border: '3px solid var(--danger)',
-                    padding: '1.25rem',
-                    marginTop: '1rem',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '0.75rem'
-                  }}>
-                    <h3 style={{ margin: 0, color: 'var(--danger)', textTransform: 'uppercase' }}>Device Disconnected</h3>
-                    <p style={{ margin: 0, fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-                      No mobile devices are currently connected. Live phone call events and remote controls require an active mobile integration.
-                    </p>
-                    <button className="btn btn-primary" style={{ alignSelf: 'flex-start' }} onClick={() => setActiveTab('devices')}>
-                      Pair / Connect Device
-                    </button>
-                  </div>
-                ) : activeCall ? (
-                  <div className="call-banner" style={{ background: 'var(--bg-secondary)', border: '3px solid var(--border-color)', width: '100%' }}>
+                {/* Active Phone Call Overlay */}
+                {activeCall && (
+                  <div className="call-banner" style={{ width: '100%' }}>
                     <div className="call-info">
                       <span className="call-title">Active Phone Call Alert ({activeCall.state})</span>
                       <span className="caller-name">{activeCall.contact_name}</span>
@@ -653,16 +410,389 @@ export default function App() {
                       )}
                     </div>
                   </div>
+                )}
+
+                {/* Connectivity Overview */}
+                <div className="card" style={{ display: 'flex', gap: '1.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                  <div style={{ flexGrow: 1, minWidth: '250px' }}>
+                    <h2>System Identity</h2>
+                    <div style={{ display: 'grid', gridTemplateColumns: '150px 1fr', gap: '0.75rem', fontSize: '0.95rem', marginBottom: '1rem' }}>
+                      <span style={{ color: 'var(--text-muted)', fontWeight: 'bold' }}>Device Name:</span>
+                      <strong>{status.device_name}</strong>
+                      <span style={{ color: 'var(--text-muted)', fontWeight: 'bold' }}>Device ID:</span>
+                      <code>{status.device_id}</code>
+                    </div>
+
+                    <h2>Connectivity Status</h2>
+                    <div style={{ display: 'grid', gridTemplateColumns: '150px 1fr', gap: '0.75rem', fontSize: '0.95rem' }}>
+                      <span style={{ color: 'var(--text-muted)', fontWeight: 'bold' }}>Link Connection:</span>
+                      <strong style={{ color: hasConnectedDevices ? 'var(--success)' : 'var(--danger)' }}>
+                        {hasConnectedDevices 
+                          ? `${connectedDevices[0].connection_type || 'Wi-Fi'} (${connectedDevices[0].device_name})` 
+                          : 'Disconnected (Waiting for connection...)'
+                        }
+                      </strong>
+                      <span style={{ color: 'var(--text-muted)', fontWeight: 'bold' }}>Bluetooth Status:</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+                        {isBluetoothConnected ? (
+                          <>
+                            <strong style={{ color: 'var(--success)' }}>Connected (Audio gateway active)</strong>
+                            <button 
+                              className="btn btn-danger btn-sm" 
+                              onClick={() => {
+                                const devWithBt = status.paired_devices.find(d => d.is_bluetooth_connected);
+                                if (devWithBt) {
+                                  disconnectBluetooth(devWithBt.device_id);
+                                }
+                              }}
+                            >
+                              Disconnect Bluetooth
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <strong style={{ color: 'var(--text-muted)' }}>Disconnected</strong>
+                            <button 
+                              className="btn btn-secondary btn-sm" 
+                              onClick={openBluetoothSettings}
+                            >
+                              Open Settings to Connect
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Recent Sync Status */}
+                <div className="card">
+                  <h2>Shared Clipboard</h2>
+                  <div style={{ padding: '1.25rem', background: 'rgba(255, 255, 255, 0.04)', borderRadius: '16px', margin: '1rem 0' }}>
+                    <p style={{ margin: 0, fontStyle: lastClipboard ? 'normal' : 'italic', wordBreak: 'break-all', whiteSpace: 'pre-wrap' }}>
+                      {lastClipboard || "No text synchronized yet..."}
+                    </p>
+                  </div>
+                  {lastClipboard && (
+                    <button className="btn btn-secondary" onClick={() => {
+                      navigator.clipboard.writeText(lastClipboard);
+                      const toast = document.getElementById('toast');
+                      if (toast) {
+                        toast.classList.add('show');
+                        setTimeout(() => toast.classList.remove('show'), 2000);
+                      }
+                    }}>
+                      Copy to PC Clipboard
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
+
+            {activeTab === 'clipboard' && (
+              <div className="card">
+                <h2>Push to Mobile Clipboard</h2>
+                {!hasConnectedDevices ? (
+                  <div style={{
+                    borderColor: 'var(--danger)',
+                    backgroundColor: 'var(--danger-container)',
+                    marginTop: '1rem',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '0.75rem',
+                    padding: '1.5rem',
+                    borderRadius: '16px'
+                  }}>
+                    <h3 style={{ margin: 0, color: 'var(--danger)', textTransform: 'uppercase' }}>Device Disconnected</h3>
+                    <p style={{ margin: 0, fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+                      No mobile devices are currently connected. Connect a device under Settings to sync your clipboard.
+                    </p>
+                    <button className="btn btn-primary btn-sm" style={{ alignSelf: 'flex-start' }} onClick={() => setActiveTab('settings')}>
+                      Go to Settings
+                    </button>
+                  </div>
                 ) : (
-                  <p style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>
-                    No active calls at the moment. Desktop audio routing loops will be established automatically when a call starts.
-                  </p>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1rem' }}>
+                    <textarea 
+                      placeholder="Type text to sync to your phone clipboard..." 
+                      value={clipboardInput}
+                      onChange={(e) => setClipboardInput(e.target.value)}
+                      style={{ minHeight: '120px', resize: 'vertical' }}
+                    />
+                    <button className="btn btn-primary" style={{ alignSelf: 'flex-start' }} onClick={pushClipboard}>
+                      Sync to Mobile
+                    </button>
+                  </div>
                 )}
               </div>
             )}
 
+            {activeTab === 'files' && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', marginTop: '1rem' }}>
+                
+                {/* Column 1: Mobile File Explorer */}
+                <div className="card">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                    <h2 style={{ margin: 0 }}>📱 Mobile Internal Storage</h2>
+                    {connectedDevices.length && connectedDevices[0].ip ? (
+                      <span className="status-badge online" style={{ fontSize: '0.8rem' }}>Connected</span>
+                    ) : (
+                      <span className="status-badge offline" style={{ fontSize: '0.8rem' }}>Disconnected</span>
+                    )}
+                  </div>
+
+                  {connectedDevices.length && connectedDevices[0].ip ? (
+                    <>
+                      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', alignItems: 'center' }}>
+                        <button 
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => {
+                            if (mobilePath.includes('/')) {
+                              const parent = mobilePath.substring(0, mobilePath.lastIndexOf('/'));
+                              fetchMobileFilesList(parent || '/sdcard');
+                            }
+                          }}
+                        >
+                          ◀ Up
+                        </button>
+                        <code style={{ flexGrow: 1, padding: '0.4rem', background: 'var(--bg)', borderRadius: '4px', overflowX: 'auto', whiteSpace: 'nowrap' }}>
+                          {mobilePath || 'Internal Storage Root'}
+                        </code>
+                      </div>
+
+                      {loadingMobile ? (
+                        <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>Loading storage...</div>
+                      ) : (
+                        <div style={{ maxHeight: '400px', overflowY: 'auto', border: '1px solid var(--border)', borderRadius: '6px' }}>
+                          {mobileFiles.length === 0 ? (
+                            <div style={{ padding: '1rem', textAlign: 'center', color: 'var(--text-muted)' }}>No files found.</div>
+                          ) : (
+                            mobileFiles.map((file: any) => (
+                              <div 
+                                key={file.path} 
+                                style={{ 
+                                  display: 'flex', 
+                                  alignItems: 'center', 
+                                  padding: '0.75rem 1rem', 
+                                  borderBottom: '1px solid var(--border)', 
+                                  cursor: 'pointer',
+                                  transition: 'background 0.2s' 
+                                }}
+                                className="file-item-hover"
+                                onClick={() => {
+                                  if (file.is_dir) {
+                                    fetchMobileFilesList(file.path);
+                                  } else {
+                                    window.open(`http://${connectedDevices[0].ip}:9090/download?path=${encodeURIComponent(file.path)}`);
+                                  }
+                                }}
+                              >
+                                <span style={{ marginRight: '0.75rem', fontSize: '1.2rem' }}>{file.is_dir ? '📁' : '📄'}</span>
+                                <div style={{ flexGrow: 1 }}>
+                                  <div style={{ fontWeight: 500, fontSize: '0.9rem' }}>{file.name}</div>
+                                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{file.is_dir ? 'Folder' : `${(file.size / 1024).toFixed(1)} KB`}</div>
+                                </div>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                      Connect your mobile app to browse and download phone storage files.
+                    </div>
+                  )}
+                </div>
+
+                {/* Column 2: PC File Explorer */}
+                <div className="card">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                    <h2 style={{ margin: 0 }}>💻 PC Filesystem</h2>
+                    <span className="status-badge online" style={{ fontSize: '0.8rem' }}>Local</span>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', alignItems: 'center' }}>
+                    <button 
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => {
+                        if (pcPath.includes('/')) {
+                          const parent = pcPath.substring(0, pcPath.lastIndexOf('/'));
+                          fetchPcFilesList(parent || '/');
+                        }
+                      }}
+                    >
+                      ◀ Up
+                    </button>
+                    <code style={{ flexGrow: 1, padding: '0.4rem', background: 'var(--bg)', borderRadius: '4px', overflowX: 'auto', whiteSpace: 'nowrap' }}>
+                      {pcPath || 'PC Root'}
+                    </code>
+                  </div>
+
+                  {loadingPc ? (
+                    <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>Loading filesystem...</div>
+                  ) : (
+                    <div style={{ maxHeight: '400px', overflowY: 'auto', border: '1px solid var(--border)', borderRadius: '6px' }}>
+                      {pcFiles.length === 0 ? (
+                        <div style={{ padding: '1rem', textAlign: 'center', color: 'var(--text-muted)' }}>No files found.</div>
+                      ) : (
+                        pcFiles.map((file: any) => (
+                          <div 
+                            key={file.path} 
+                            style={{ 
+                              display: 'flex', 
+                              alignItems: 'center', 
+                              padding: '0.75rem 1rem', 
+                              borderBottom: '1px solid var(--border)', 
+                              cursor: 'pointer',
+                              transition: 'background 0.2s' 
+                            }}
+                            className="file-item-hover"
+                            onClick={() => {
+                              if (file.is_dir) {
+                                fetchPcFilesList(file.path);
+                              } else {
+                                window.open(`http://localhost:8080/api/v1/files/download?path=${encodeURIComponent(file.path)}`);
+                              }
+                            }}
+                          >
+                            <span style={{ marginRight: '0.75rem', fontSize: '1.2rem' }}>{file.is_dir ? '📁' : '📄'}</span>
+                            <div style={{ flexGrow: 1 }}>
+                              <div style={{ fontWeight: 500, fontSize: '0.9rem' }}>{file.name}</div>
+                              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{file.is_dir ? 'Folder' : `${(file.size / 1024).toFixed(1)} KB`}</div>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
+
+              </div>
+            )}
+
+            {activeTab === 'settings' && (
+              <>
+                {/* Clipboard Sync Options */}
+                <div className="card">
+                  <h2>Clipboard Configurations</h2>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', marginTop: '1rem' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                      <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)', fontWeight: 'bold' }}>Sync Direction</span>
+                      <select 
+                        value={clipDirection} 
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setClipDirection(val);
+                          saveClipboardConfig(val, clipAutoSync);
+                        }}
+                      >
+                        <option value="bidirectional">Bidirectional (Sync both ways)</option>
+                        <option value="desktop_to_mobile">Desktop to Mobile Only</option>
+                        <option value="mobile_to_desktop">Mobile to Desktop Only</option>
+                      </select>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginTop: '0.25rem' }}>
+                      <input 
+                        type="checkbox" 
+                        id="auto-sync-checkbox"
+                        checked={clipAutoSync}
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          setClipAutoSync(checked);
+                          saveClipboardConfig(clipDirection, checked);
+                        }}
+                        style={{
+                          width: '18px',
+                          height: '18px',
+                          cursor: 'pointer',
+                          accentColor: 'var(--accent)'
+                        }}
+                      />
+                      <label htmlFor="auto-sync-checkbox" style={{ fontSize: '0.95rem', cursor: 'pointer', userSelect: 'none', fontWeight: 'bold' }}>
+                        Automatically sync copies in real-time
+                      </label>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Paired Devices Manager */}
+                <div className="card">
+                  <h2>Paired Devices</h2>
+                  {status.paired_devices.length === 0 ? (
+                    <p style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                      No paired devices found. Discoverable locally as {status.device_name} via mDNS.
+                    </p>
+                  ) : (
+                    <div className="device-grid">
+                      {status.paired_devices.map((dev) => (
+                        <div key={dev.device_id} className="device-card">
+                          <div>
+                            <div className="device-name">{dev.device_name}</div>
+                            <div className="device-id">{dev.device_id}</div>
+                          </div>
+                          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                            <span className={`status-badge badge-sm ${dev.is_online ? 'online' : 'offline'}`}>
+                              {dev.is_online ? `Online (${dev.connection_type || 'Wi-Fi'})` : 'Offline'}
+                            </span>
+                            <span className={`status-badge badge-sm ${dev.is_bluetooth_connected ? 'online' : ''}`}>
+                              Bluetooth: {dev.is_bluetooth_connected ? 'Connected' : 'Disconnected'}
+                            </span>
+                            {dev.is_bluetooth_connected ? (
+                              <button 
+                                className="btn btn-secondary btn-sm" 
+                                onClick={() => disconnectBluetooth(dev.device_id)}
+                              >
+                                Disconnect BT
+                              </button>
+                            ) : (
+                              <button 
+                                className="btn btn-secondary btn-sm" 
+                                onClick={openBluetoothSettings}
+                              >
+                                Connect BT
+                              </button>
+                            )}
+                            <button 
+                              className="btn btn-danger btn-sm" 
+                              onClick={() => unpairDevice(dev.device_id)}
+                            >
+                              Unpair
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Wi-Fi Setup QR Code (Hidden when connected) */}
+                {!hasConnectedDevices && (
+                  <div className="card" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem' }}>
+                    <h2>Wi-Fi Connection Wizard</h2>
+                    <p style={{ textAlign: 'center', color: 'var(--text-muted)', maxWidth: '500px', fontSize: '0.95rem' }}>
+                      To pair a new mobile device over Wi-Fi, open the platypusd app and scan this pairing configuration.
+                    </p>
+                    {qrCodeUrl ? (
+                      <div className="qr-container">
+                        <img src={qrCodeUrl} alt="Pairing QR Code" style={{ width: '180px', height: '180px', display: 'block' }} />
+                      </div>
+                    ) : (
+                      <p>Generating pairing configurations...</p>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+
           </div>
         )}
+
+        {/* Floating Toast Notification */}
+        <div id="toast" className="toast-container">
+          Copied to clipboard!
+        </div>
+
       </div>
     </div>
   );

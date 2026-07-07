@@ -21,6 +21,8 @@ pub struct AppState {
     pub identity: LocalIdentity,
     pub tx: broadcast::Sender<WsMessage>,
     pub active_connections: Arc<tokio::sync::Mutex<std::collections::HashSet<String>>>,
+    pub connection_types: Arc<tokio::sync::Mutex<std::collections::HashMap<String, String>>>,
+    pub device_ips: Arc<tokio::sync::Mutex<std::collections::HashMap<String, String>>>,
     pub active_bluetooth: Arc<tokio::sync::Mutex<std::collections::HashSet<String>>>,
 }
 
@@ -43,6 +45,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/v1/pairing/unpair", post(routes::unpair_device_route))
         .route("/api/v1/calls/action", post(routes::calls_action))
         .route("/api/v1/calls/state", post(routes::update_call_state))
+        .route("/api/v1/files/list", get(routes::list_files))
+        .route("/api/v1/files/download", get(routes::download_file))
         .route("/api/v1/clipboard", post(routes::update_clipboard))
         .route("/api/v1/clipboard/config", get(routes::get_clipboard_config).post(routes::set_clipboard_config))
         .route("/api/v1/bluetooth/open-settings", post(routes::open_bluetooth_settings_route))

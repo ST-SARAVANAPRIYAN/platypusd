@@ -1,7 +1,8 @@
 use axum::{
-    extract::{ws::{Message, WebSocket, WebSocketUpgrade}, State, Query},
+    extract::{ws::{Message, WebSocket, WebSocketUpgrade}, State, Query, connect_info::ConnectInfo},
     response::IntoResponse,
 };
+use std::net::SocketAddr;
 use futures_util::{sink::SinkExt, stream::StreamExt};
 use crate::api::{AppState, WsMessage};
 use tracing::{info, warn};
@@ -10,18 +11,27 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 pub struct WsParams {
     pub device_id: Option<String>,
+    pub connection_type: Option<String>,
 }
 
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Query(params): Query<WsParams>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_socket(socket, params.device_id, state))
+    let peer_ip = addr.ip().to_string();
+    ws.on_upgrade(move |socket| handle_socket(socket, params.device_id, params.connection_type, Some(peer_ip), state))
 }
 
-async fn handle_socket(socket: WebSocket, device_id: Option<String>, state: AppState) {
-    info!("New WebSocket connection established. Device ID query param: {:?}", device_id);
+async fn handle_socket(
+    socket: WebSocket,
+    device_id: Option<String>,
+    connection_type: Option<String>,
+    peer_ip: Option<String>,
+    state: AppState,
+) {
+    info!("New WebSocket connection established. Device ID: {:?}, Connection Type: {:?}, IP: {:?}", device_id, connection_type, peer_ip);
     let (mut sender, mut receiver) = socket.split();
     let mut rx = state.tx.subscribe();
 
@@ -32,9 +42,23 @@ async fn handle_socket(socket: WebSocket, device_id: Option<String>, state: AppS
         if id != "desktop" {
             is_mobile = true;
             dev_id = id.clone();
-            info!("Mobile device connected via WS: {}", dev_id);
-            let mut active = state.active_connections.lock().await;
-            active.insert(dev_id.clone());
+            info!("Mobile device connected via WS: {} ({:?}) at IP {:?}", dev_id, connection_type, peer_ip);
+            
+            {
+                let mut active = state.active_connections.lock().await;
+                active.insert(dev_id.clone());
+            }
+            {
+                let mut types = state.connection_types.lock().await;
+                types.insert(dev_id.clone(), connection_type.unwrap_or_else(|| "Local Network".to_string()));
+            }
+            {
+                let mut ips = state.device_ips.lock().await;
+                if let Some(ref ip) = peer_ip {
+                    ips.insert(dev_id.clone(), ip.clone());
+                }
+            }
+
             // Broadcast connection update
             let _ = state.tx.send(WsMessage {
                 event: "DeviceConnected".to_string(),
@@ -131,6 +155,14 @@ async fn handle_socket(socket: WebSocket, device_id: Option<String>, state: AppS
         {
             let mut active = state.active_connections.lock().await;
             active.remove(&dev_id);
+        }
+        {
+            let mut types = state.connection_types.lock().await;
+            types.remove(&dev_id);
+        }
+        {
+            let mut ips = state.device_ips.lock().await;
+            ips.remove(&dev_id);
         }
         {
             let mut active_bt = state.active_bluetooth.lock().await;

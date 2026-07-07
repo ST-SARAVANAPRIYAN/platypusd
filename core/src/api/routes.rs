@@ -1,5 +1,5 @@
 use axum::{
-    extract::State,
+    extract::{State, Query},
     http::StatusCode,
     Json,
 };
@@ -25,17 +25,30 @@ pub struct PairedDeviceDto {
     pub device_name: String,
     pub is_online: bool,
     pub is_bluetooth_connected: bool,
+    pub connection_type: Option<String>,
+    pub ip: Option<String>,
 }
 
 pub async fn get_status(State(state): State<AppState>) -> Json<StatusResponse> {
     let paired = state.db.get_paired_devices().await.unwrap_or_default();
     let active = state.active_connections.lock().await;
     let active_bt = state.active_bluetooth.lock().await;
+    let types = state.connection_types.lock().await;
+    let ips = state.device_ips.lock().await;
     let paired_dtos = paired.into_iter()
         .map(|(id, name)| {
             let is_online = active.contains(&id);
             let is_bluetooth_connected = active_bt.contains(&id);
-            PairedDeviceDto { device_id: id, device_name: name, is_online, is_bluetooth_connected }
+            let connection_type = types.get(&id).cloned();
+            let ip = ips.get(&id).cloned();
+            PairedDeviceDto { 
+                device_id: id, 
+                device_name: name, 
+                is_online, 
+                is_bluetooth_connected,
+                connection_type,
+                ip
+            }
         })
         .collect();
 
@@ -357,5 +370,74 @@ pub async fn disconnect_bluetooth_device_route(
             "error": "Device not paired"
         })))
     }
+}
+
+#[derive(Deserialize)]
+pub struct FileListParams {
+    pub path: Option<String>,
+}
+
+pub async fn list_files(
+    Query(params): Query<FileListParams>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let path_str = params.path.unwrap_or_else(|| "/home/saravana".to_string());
+    let path = std::path::Path::new(&path_str);
+    
+    if !path.exists() {
+        return Err((StatusCode::NOT_FOUND, "Directory not found".to_string()));
+    }
+    
+    let entries = std::fs::read_dir(path)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        
+    let mut list = Vec::new();
+    for entry in entries {
+        if let Ok(entry) = entry {
+            let file_name = entry.file_name().to_string_lossy().into_owned();
+            let metadata = entry.metadata().ok();
+            let is_dir = metadata.as_ref().map(|m| m.is_dir()).unwrap_or(false);
+            let size = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
+            let abs_path = entry.path().to_string_lossy().into_owned();
+            
+            list.push(serde_json::json!({
+                "name": file_name,
+                "is_dir": is_dir,
+                "size": size,
+                "path": abs_path
+            }));
+        }
+    }
+    
+    Ok(Json(serde_json::json!(list)))
+}
+
+pub async fn download_file(
+    Query(params): Query<FileListParams>,
+) -> Result<axum::response::Response, (StatusCode, String)> {
+    let path_str = params.path.ok_or_else(|| (StatusCode::BAD_REQUEST, "Missing path".to_string()))?;
+    let path = std::path::Path::new(&path_str);
+    
+    if !path.exists() || !path.is_file() {
+        return Err((StatusCode::NOT_FOUND, "File not found".to_string()));
+    }
+    
+    let file = tokio::fs::File::open(path)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        
+    let stream = tokio_util::io::ReaderStream::new(file);
+    let body = axum::body::Body::from_stream(stream);
+    
+    let file_name = path.file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("file");
+        
+    let response = axum::response::Response::builder()
+        .header("Content-Type", "application/octet-stream")
+        .header("Content-Disposition", format!("attachment; filename=\"{}\"", file_name))
+        .body(body)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        
+    Ok(response)
 }
 
