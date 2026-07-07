@@ -341,6 +341,7 @@ class ConnectionService : Service() {
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                Log.i(TAG, "WS Received text: $text")
                 try {
                     val json = JSONObject(text)
                     val event = json.optString("event")

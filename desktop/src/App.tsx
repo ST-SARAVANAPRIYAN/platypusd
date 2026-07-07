@@ -165,8 +165,12 @@ export default function App() {
   };
 
   const sendWebSocketCommand = (command: string, data: any = {}) => {
+    console.log("Attempting to send WS command:", command, "readyState:", wsRef.current?.readyState);
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ command, data }));
+      console.log("WS Command sent successfully:", command);
+    } else {
+      console.warn("WS Command dropped (socket not open):", command);
     }
   };
 
@@ -618,50 +622,50 @@ export default function App() {
             )}
 
             {activeTab === 'files' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', marginTop: '1rem' }}>
+              <section style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', marginTop: '1rem' }} aria-label="File Explorer">
                 
                 {/* Selected File Details Overlay */}
                 {selectedFileInfo && (
-                  <div className="card" style={{ border: '2px solid var(--accent)', background: 'var(--bg-secondary)', position: 'relative' }}>
+                  <aside className="card" style={{ border: '2px solid var(--accent)', background: 'var(--bg-secondary)', position: 'relative' }}>
                     <button 
                       onClick={() => setSelectedFileInfo(null)}
                       style={{ position: 'absolute', right: '1rem', top: '1rem', background: 'none', border: 'none', color: 'var(--text-main)', fontSize: '1.2rem', cursor: 'pointer', fontWeight: 'bold' }}
                     >
                       Close
                     </button>
-                    <h3 style={{ margin: '0 0 0.75rem 0', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <h3 style={{ margin: '0 0 0.75rem 0' }}>
                       Detailed File Properties
                     </h3>
-                    <div style={{ display: 'grid', gridTemplateColumns: '150px 1fr', gap: '0.5rem 1rem', fontSize: '0.9rem' }}>
-                      <strong style={{ color: 'var(--text-muted)' }}>Name:</strong>
-                      <span>{selectedFileInfo.name}</span>
-                      <strong style={{ color: 'var(--text-muted)' }}>Location:</strong>
-                      <code style={{ wordBreak: 'break-all' }}>{selectedFileInfo.path}</code>
-                      <strong style={{ color: 'var(--text-muted)' }}>Type:</strong>
-                      <span>{selectedFileInfo.is_dir ? 'Directory / Folder' : 'Standard File'}</span>
-                      <strong style={{ color: 'var(--text-muted)' }}>Size:</strong>
-                      <span>{selectedFileInfo.is_dir ? '--' : `${(selectedFileInfo.size / 1024).toFixed(2)} KB (${selectedFileInfo.size} bytes)`}</span>
-                      <strong style={{ color: 'var(--text-muted)' }}>Last Modified:</strong>
-                      <span>{selectedFileInfo.last_modified ? new Date(selectedFileInfo.last_modified * 1000).toLocaleString() : 'Unknown'}</span>
-                    </div>
-                  </div>
+                    <dl style={{ display: 'grid', gridTemplateColumns: '150px 1fr', gap: '0.5rem 1rem', fontSize: '0.9rem', margin: 0 }}>
+                      <dt style={{ color: 'var(--text-muted)', fontWeight: 'bold' }}>Name:</dt>
+                      <dd style={{ margin: 0 }}>{selectedFileInfo.name}</dd>
+                      <dt style={{ color: 'var(--text-muted)', fontWeight: 'bold' }}>Location:</dt>
+                      <dd style={{ margin: 0 }}><code style={{ wordBreak: 'break-all' }}>{selectedFileInfo.path}</code></dd>
+                      <dt style={{ color: 'var(--text-muted)', fontWeight: 'bold' }}>Type:</dt>
+                      <dd style={{ margin: 0 }}>{selectedFileInfo.is_dir ? 'Directory / Folder' : 'Standard File'}</dd>
+                      <dt style={{ color: 'var(--text-muted)', fontWeight: 'bold' }}>Size:</dt>
+                      <dd style={{ margin: 0 }}>{selectedFileInfo.is_dir ? '--' : `${(selectedFileInfo.size / 1024).toFixed(2)} KB (${selectedFileInfo.size} bytes)`}</dd>
+                      <dt style={{ color: 'var(--text-muted)', fontWeight: 'bold' }}>Last Modified:</dt>
+                      <dd style={{ margin: 0 }}>{selectedFileInfo.last_modified ? new Date(selectedFileInfo.last_modified * 1000).toLocaleString() : 'Unknown'}</dd>
+                    </dl>
+                  </aside>
                 )}
 
                 {/* Mobile File Explorer (browsed from PC) */}
-                <div className="card" style={{ display: 'flex', flexDirection: 'column', minHeight: '520px', width: '100%' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                <article className="card" style={{ display: 'flex', flexDirection: 'column', minHeight: '520px', width: '100%' }}>
+                  <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
                     <h2 style={{ margin: 0 }}>Browse Mobile Storage</h2>
                     {status?.paired_devices.some(d => d.is_online) ? (
                       <span className="status-badge online" style={{ fontSize: '0.8rem' }}>Server Active</span>
                     ) : (
                       <span className="status-badge offline" style={{ fontSize: '0.8rem' }}>Offline</span>
                     )}
-                  </div>
+                  </header>
 
                   {status?.paired_devices.some(d => d.is_online) ? (
                     <>
                       {/* Search & Sort Controls */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1rem' }}>
+                      <menu style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1rem', padding: 0, margin: '0 0 1rem 0' }}>
                         <input 
                           type="text" 
                           placeholder="Search files..." 
@@ -703,10 +707,10 @@ export default function App() {
                             />
                           </label>
                         </div>
-                      </div>
+                      </menu>
 
                       {/* Navigation Row */}
-                      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem', alignItems: 'center' }}>
+                      <nav style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem', alignItems: 'center' }}>
                         <button 
                           className="btn btn-secondary btn-sm"
                           onClick={() => {
@@ -721,7 +725,7 @@ export default function App() {
                         <code style={{ flexGrow: 1, padding: '0.4rem 0.75rem', background: 'var(--bg-primary)', borderRadius: '6px', fontSize: '0.85rem', overflowX: 'auto', whiteSpace: 'nowrap', border: '1px solid var(--border-color)' }}>
                           {mobilePath || '/sdcard'}
                         </code>
-                      </div>
+                      </nav>
 
                       {/* File List Pane */}
                       {loadingMobile ? (
@@ -731,75 +735,77 @@ export default function App() {
                           {getProcessedFiles(mobileFiles, mobileSearch, mobileSort, mobileSortOrder).length === 0 ? (
                             <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>No matching files found.</div>
                           ) : (
-                            getProcessedFiles(mobileFiles, mobileSearch, mobileSort, mobileSortOrder).map((file: any) => (
-                              <div 
-                                key={file.path} 
-                                style={{ 
-                                  display: 'flex', 
-                                  alignItems: 'center', 
-                                  padding: '0.6rem 0.85rem', 
-                                  borderBottom: '1px solid var(--border-color)',
-                                  transition: 'background 0.2s'
-                                }}
-                                className="file-item-hover"
-                              >
-                                <span 
+                            <ul style={{ listStyleType: 'none', padding: 0, margin: 0 }}>
+                              {getProcessedFiles(mobileFiles, mobileSearch, mobileSort, mobileSortOrder).map((file: any) => (
+                                <li 
+                                  key={file.path} 
                                   style={{ 
-                                    padding: '0.15rem 0.4rem', 
-                                    fontSize: '0.7rem', 
-                                    textTransform: 'uppercase', 
-                                    marginRight: '0.75rem', 
-                                    background: file.is_dir ? 'var(--accent)' : 'var(--bg-secondary)', 
-                                    color: file.is_dir ? 'white' : 'var(--text-main)', 
-                                    border: '1px solid var(--border-color)',
-                                    fontWeight: 'bold',
-                                    borderRadius: '4px',
-                                    cursor: 'pointer'
+                                    display: 'flex', 
+                                    alignItems: 'center', 
+                                    padding: '0.6rem 0.85rem', 
+                                    borderBottom: '1px solid var(--border-color)',
+                                    transition: 'background 0.2s'
                                   }}
-                                  onClick={() => {
-                                    if (file.is_dir) fetchMobileFilesList(file.path);
-                                  }}
+                                  className="file-item-hover"
                                 >
-                                  {file.is_dir ? 'Folder' : 'File'}
-                                </span>
-                                <div 
-                                  style={{ flexGrow: 1, minWidth: 0, cursor: file.is_dir ? 'pointer' : 'default' }}
-                                  onClick={() => {
-                                    if (file.is_dir) fetchMobileFilesList(file.path);
-                                  }}
-                                >
-                                  <div style={{ fontWeight: 500, fontSize: '0.85rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.name}</div>
-                                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                                    {file.is_dir ? 'Folder' : `${(file.size / 1024).toFixed(1)} KB`}
+                                  <span 
+                                    style={{ 
+                                      padding: '0.15rem 0.4rem', 
+                                      fontSize: '0.7rem', 
+                                      textTransform: 'uppercase', 
+                                      marginRight: '0.75rem', 
+                                      background: file.is_dir ? 'var(--accent)' : 'var(--bg-secondary)', 
+                                      color: file.is_dir ? 'white' : 'var(--text-main)', 
+                                      border: '1px solid var(--border-color)',
+                                      fontWeight: 'bold',
+                                      borderRadius: '4px',
+                                      cursor: 'pointer'
+                                    }}
+                                    onClick={() => {
+                                      if (file.is_dir) fetchMobileFilesList(file.path);
+                                    }}
+                                  >
+                                    {file.is_dir ? 'Folder' : 'File'}
+                                  </span>
+                                  <div 
+                                    style={{ flexGrow: 1, minWidth: 0, cursor: file.is_dir ? 'pointer' : 'default' }}
+                                    onClick={() => {
+                                      if (file.is_dir) fetchMobileFilesList(file.path);
+                                    }}
+                                  >
+                                    <div style={{ fontWeight: 500, fontSize: '0.85rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.name}</div>
+                                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                      {file.is_dir ? 'Folder' : `${(file.size / 1024).toFixed(1)} KB`}
+                                    </div>
                                   </div>
-                                </div>
-                                <div style={{ display: 'flex', gap: '0.35rem' }}>
-                                  {!file.is_dir && (
+                                  <div style={{ display: 'flex', gap: '0.35rem' }}>
+                                    {!file.is_dir && (
+                                      <button 
+                                        className="btn btn-secondary btn-sm" 
+                                        style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem' }}
+                                        onClick={() => window.open(`http://${status?.paired_devices.filter(d => d.is_online)[0].ip}:9090/download?path=${encodeURIComponent(file.path)}`)}
+                                      >
+                                        Download
+                                      </button>
+                                    )}
                                     <button 
                                       className="btn btn-secondary btn-sm" 
                                       style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem' }}
-                                      onClick={() => window.open(`http://${status?.paired_devices.filter(d => d.is_online)[0].ip}:9090/download?path=${encodeURIComponent(file.path)}`)}
+                                      onClick={() => setSelectedFileInfo(file)}
                                     >
-                                      Download
+                                      Details
                                     </button>
-                                  )}
-                                  <button 
-                                    className="btn btn-secondary btn-sm" 
-                                    style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem' }}
-                                    onClick={() => setSelectedFileInfo(file)}
-                                  >
-                                    Details
-                                  </button>
-                                  <button 
-                                    className="btn btn-danger btn-sm" 
-                                    style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem', background: 'var(--danger-container)', color: 'var(--danger)' }}
-                                    onClick={() => deleteMobileFile(file.path)}
-                                  >
-                                    Delete
-                                  </button>
-                                </div>
-                              </div>
-                            ))
+                                    <button 
+                                      className="btn btn-danger btn-sm" 
+                                      style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem', background: 'var(--danger-container)', color: 'var(--danger)' }}
+                                      onClick={() => deleteMobileFile(file.path)}
+                                    >
+                                      Delete
+                                    </button>
+                                  </div>
+                                </li>
+                              ))}
+                            </ul>
                           )}
                         </div>
                       )}
@@ -810,14 +816,13 @@ export default function App() {
                       <span style={{ fontSize: '0.9rem' }}>Please connect your phone to launch the lazy-loaded file server.</span>
                     </div>
                   )}
-                </div>
+                </article>
 
-              </div>
+              </section>
             )}
 
             {activeTab === 'settings' && (
               <>
-                {/* Clipboard Sync Options */}
                 <div className="card">
                   <h2>Clipboard Configurations</h2>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', marginTop: '1rem' }}>

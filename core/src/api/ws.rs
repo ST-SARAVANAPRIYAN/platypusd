@@ -70,20 +70,31 @@ async fn handle_socket(
     // Spawn a task to forward events from the broadcast channel to the WebSocket sender
     let dev_id_clone = dev_id.clone();
     let mut send_task = tokio::spawn(async move {
-        while let Ok(msg) = rx.recv().await {
-            // If the device was unpaired, terminate its WebSocket connection immediately!
-            if msg.event == "DeviceUnpaired" {
-                if let Some(target_id) = msg.data.get("device_id").and_then(|id| id.as_str()) {
-                    if target_id == dev_id_clone {
-                        warn!("Device {} was unpaired. Terminating WebSocket connection.", dev_id_clone);
-                        break;
+        loop {
+            match rx.recv().await {
+                Ok(msg) => {
+                    // If the device was unpaired, terminate its WebSocket connection immediately!
+                    if msg.event == "DeviceUnpaired" {
+                        if let Some(target_id) = msg.data.get("device_id").and_then(|id| id.as_str()) {
+                            if target_id == dev_id_clone {
+                                warn!("Device {} was unpaired. Terminating WebSocket connection.", dev_id_clone);
+                                break;
+                            }
+                        }
+                    }
+
+                    let serialized = serde_json::to_string(&msg).unwrap_or_default();
+                    if sender.send(Message::Text(serialized)).await.is_err() {
+                        break; // Client disconnected
                     }
                 }
-            }
-
-            let serialized = serde_json::to_string(&msg).unwrap_or_default();
-            if sender.send(Message::Text(serialized)).await.is_err() {
-                break; // Client disconnected
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                    warn!("WebSocket send task lagged behind, skipped {} messages", skipped);
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    break;
+                }
             }
         }
     });
