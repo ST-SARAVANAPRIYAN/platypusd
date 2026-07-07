@@ -236,20 +236,101 @@
   padding: 0;
 }
 
-/* Fix global padding/margin reset squishing @material/web custom elements */
-md-filled-button, md-outlined-button, md-text-button, md-switch, md-checkbox {
-  padding: initial;
-  margin: initial;
+/* Custom Material 3 styled Buttons */
+.m3-btn {
   display: inline-flex;
-}
-
-md-filled-button, md-outlined-button, md-text-button {
+  align-items: center;
+  justify-content: center;
+  padding: 0 24px;
+  height: 40px;
+  border-radius: 100px;
+  font-family: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+  border: none;
+  background: transparent;
   min-width: max-content;
   flex-shrink: 0;
-  --md-filled-button-leading-space: 20px;
-  --md-filled-button-trailing-space: 20px;
-  --md-outlined-button-leading-space: 20px;
-  --md-outlined-button-trailing-space: 20px;
+  outline: none;
+}
+
+.m3-btn-filled {
+  background-color: var(--accent);
+  color: var(--text-accent);
+}
+
+.m3-btn-filled:hover {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+  filter: brightness(1.08);
+}
+
+.m3-btn-filled:active {
+  transform: scale(0.98);
+}
+
+.m3-btn-outlined {
+  border: 1px solid var(--border-color);
+  color: var(--accent);
+  background-color: transparent;
+}
+
+.m3-btn-outlined:hover {
+  background-color: rgba(103, 80, 164, 0.08);
+}
+
+.dark-mode .m3-btn-outlined:hover {
+  background-color: rgba(208, 188, 255, 0.08);
+}
+
+.m3-btn-outlined:active {
+  transform: scale(0.98);
+}
+
+.m3-btn:disabled, .m3-btn-outlined:disabled {
+  opacity: 0.38;
+  pointer-events: none;
+  color: var(--text-muted);
+  border-color: var(--border-color);
+}
+
+/* Custom Material 3 Switch Toggle */
+.m3-switch {
+  width: 52px;
+  height: 32px;
+  border-radius: 16px;
+  border: 2px solid var(--text-muted);
+  background-color: var(--bg-secondary);
+  position: relative;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  outline: none;
+}
+
+.m3-switch-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background-color: var(--text-muted);
+  position: absolute;
+  left: 6px;
+  transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.m3-switch.checked {
+  background-color: var(--accent);
+  border-color: var(--accent);
+}
+
+.m3-switch.checked .m3-switch-thumb {
+  width: 24px;
+  height: 24px;
+  background-color: var(--bg-card);
+  left: 24px; /* 52px - 24px - 4px */
 }
 
 .container {

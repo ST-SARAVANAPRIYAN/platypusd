@@ -1,9 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
 import QRCode from 'qrcode';
-import '@material/web/button/filled-button.js';
-import '@material/web/button/outlined-button.js';
-import '@material/web/button/text-button.js';
-import '@material/web/switch/switch.js';
 import { LayoutDashboard, Clipboard, Folder, Settings } from 'lucide-react';
 
 interface PairedDevice {
@@ -34,7 +30,6 @@ interface StatusData {
 
 export default function App() {
   const wsRef = useRef<WebSocket | null>(null);
-  const switchRef = useRef<any>(null);
   const [status, setStatus] = useState<StatusData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [activeCall, setActiveCall] = useState<ActiveCall | null>(null);
@@ -57,9 +52,6 @@ export default function App() {
   const [mobileSortOrder, setMobileSortOrder] = useState<'asc' | 'desc'>('asc');
   const [selectedFileInfo, setSelectedFileInfo] = useState<any | null>(null);
   const [viewMode, setViewMode] = useState<'list' | 'grid' | 'compact'>('list');
-  const [previewFile, setPreviewFile] = useState<any | null>(null);
-  const [previewContent, setPreviewContent] = useState<string | null>(null);
-  const [loadingPreview, setLoadingPreview] = useState<boolean>(false);
 
   const showToast = (message: string) => {
     const toast = document.getElementById('toast');
@@ -180,32 +172,12 @@ export default function App() {
       return;
     }
     
-    setPreviewFile(file);
-    setPreviewContent(null);
-    
     const connected = status?.paired_devices.filter(d => d.is_online) || [];
     if (!connected.length || !connected[0].ip) return;
     const phoneIp = connected[0].ip;
     
-    const fileExt = file.name.split('.').pop()?.toLowerCase();
-    const isText = ['txt', 'log', 'json', 'xml', 'js', 'ts', 'tsx', 'css', 'html', 'md', 'ini', 'sh', 'bat', 'csv', 'yaml', 'yml'].includes(fileExt || '');
-    
-    if (isText) {
-      setLoadingPreview(true);
-      try {
-        const res = await fetch(`http://${phoneIp}:9090/download?path=${encodeURIComponent(file.path)}`);
-        if (res.ok) {
-          const text = await res.text();
-          setPreviewContent(text);
-        } else {
-          setPreviewContent("Error: Unable to load file content.");
-        }
-      } catch (err: any) {
-        setPreviewContent(`Error: ${err.message}`);
-      } finally {
-        setLoadingPreview(false);
-      }
-    }
+    const fileUrl = `http://${phoneIp}:9090/download?path=${encodeURIComponent(file.path)}`;
+    window.open(fileUrl, '_blank');
   };
 
   const sendWebSocketCommand = (command: string, data: any = {}) => {
@@ -238,12 +210,6 @@ export default function App() {
   const [palette, setPalette] = useState<string>(() => {
     return localStorage.getItem('theme-palette') || 'purple';
   });
-
-  useEffect(() => {
-    if (switchRef.current) {
-      switchRef.current.checked = clipAutoSync;
-    }
-  }, [clipAutoSync]);
 
   const fetchClipboardConfig = async () => {
     try {
@@ -361,6 +327,13 @@ export default function App() {
     let reconnectTimeout: any = null;
 
     const connectWS = () => {
+      if (ws) {
+        ws.onopen = null;
+        ws.onmessage = null;
+        ws.onerror = null;
+        ws.onclose = null;
+        try { ws.close(); } catch (e) {}
+      }
       console.log('Connecting to WebSocket event stream...');
       ws = new WebSocket('ws://localhost:8080/api/v1/events?device_id=desktop');
 
@@ -672,96 +645,7 @@ export default function App() {
             {activeTab === 'files' && (
               <section style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', marginTop: '1rem', width: '100%' }} aria-label="File Explorer">
                 
-                {/* Media Preview / File Opener Modal */}
-                {previewFile && (
-                  <div style={{
-                    position: 'fixed',
-                    top: 0,
-                    left: 0,
-                    width: '100vw',
-                    height: '100vh',
-                    background: 'rgba(0, 0, 0, 0.85)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    zIndex: 9999,
-                    backdropFilter: 'blur(8px)',
-                    padding: '2rem'
-                  }}>
-                    <aside className="card" style={{ width: '90%', maxWidth: '800px', height: '85%', display: 'flex', flexDirection: 'column', gap: '1.25rem', background: 'var(--bg-secondary)', border: '2px solid var(--accent)', position: 'relative', padding: '2rem' }}>
-                      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: '0.75rem', borderBottom: '1px solid var(--border-color)' }}>
-                        <h3 style={{ margin: 0, textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap', maxWidth: '75%', fontSize: '1.1rem' }}>{previewFile.name}</h3>
-                        <button 
-                          className="btn btn-secondary btn-sm"
-                          onClick={() => setPreviewFile(null)}
-                        >
-                          Close Preview
-                        </button>
-                      </header>
-                      
-                      <div style={{ flexGrow: 1, overflow: 'auto', background: 'var(--bg-primary)', borderRadius: '12px', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}>
-                        {(() => {
-                          const ext = previewFile.name.split('.').pop()?.toLowerCase() || '';
-                          const phoneIp = status?.paired_devices.filter(d => d.is_online)[0]?.ip;
-                          const fileUrl = `http://${phoneIp}:9090/download?path=${encodeURIComponent(previewFile.path)}`;
-                          
-                          if (['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(ext)) {
-                            return <img src={fileUrl} alt={previewFile.name} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />;
-                          }
-                          if (['mp4', 'webm', 'ogg', 'mkv'].includes(ext)) {
-                            return <video src={fileUrl} controls autoPlay style={{ maxWidth: '100%', maxHeight: '100%' }} />;
-                          }
-                          if (['mp3', 'wav', 'ogg', 'aac', 'm4a'].includes(ext)) {
-                            return <audio src={fileUrl} controls autoPlay style={{ width: '80%' }} />;
-                          }
-                          if (loadingPreview) {
-                            return <div style={{ color: 'var(--text-muted)' }}>Loading text content...</div>;
-                          }
-                          if (previewContent !== null) {
-                            return (
-                              <pre style={{ width: '100%', height: '100%', margin: 0, padding: '0.75rem', fontSize: '0.85rem', fontFamily: 'monospace', overflow: 'auto', whiteSpace: 'pre-wrap', color: 'var(--text-main)', textAlign: 'left' }}>
-                                {previewContent}
-                              </pre>
-                            );
-                          }
-                          return (
-                            <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '1rem', alignItems: 'center' }}>
-                              <span style={{ color: 'var(--text-muted)', fontSize: '0.95rem' }}>Preview unavailable for this format ({ext.toUpperCase()})</span>
-                              <button 
-                                className="btn btn-primary"
-                                onClick={() => window.open(fileUrl)}
-                              >
-                                Download File
-                              </button>
-                            </div>
-                          );
-                        })()}
-                      </div>
-                      
-                      <footer style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.85rem', color: 'var(--text-muted)', paddingTop: '0.75rem', borderTop: '1px solid var(--border-color)' }}>
-                        <span>Size: {(previewFile.size / 1024).toFixed(2)} KB ({previewFile.size} bytes)</span>
-                        <div style={{ display: 'flex', gap: '0.5rem' }}>
-                          <button 
-                            className="btn btn-danger btn-sm"
-                            style={{ background: 'var(--danger-container)', color: 'var(--danger)' }}
-                            onClick={() => {
-                              deleteMobileFile(previewFile.path);
-                              setPreviewFile(null);
-                            }}
-                          >
-                            Delete File
-                          </button>
-                          <button 
-                            className="btn btn-primary btn-sm"
-                            onClick={() => window.open(`http://${status?.paired_devices.filter(d => d.is_online)[0].ip}:9090/download?path=${encodeURIComponent(previewFile.path)}`)}
-                          >
-                            Download
-                          </button>
-                        </div>
-                      </footer>
-                    </aside>
-                  </div>
-                )}
+
 
                 {/* Selected File Details Overlay */}
                 {selectedFileInfo && (
@@ -1157,42 +1041,44 @@ export default function App() {
                   <div style={{ display: 'flex', gap: '2.5rem', alignItems: 'center', flexWrap: 'wrap', marginTop: '1rem' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                       <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)', fontWeight: 'bold' }}>Application Theme</span>
-                      <md-outlined-button 
+                      <button 
+                        className="m3-btn m3-btn-outlined"
                         onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
                         style={{ alignSelf: 'flex-start' }}
                       >
                         {theme === 'light' ? 'Dark Theme' : 'Light Theme'}
-                      </md-outlined-button>
+                      </button>
                     </div>
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                       <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)', fontWeight: 'bold' }}>Theme Color Palette</span>
                       <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.25rem' }}>
                         {[
-                          { id: 'purple', name: 'Amethyst Purple', color: '#6750a4' },
-                          { id: 'blue', name: 'Platypus Blue', color: '#0f52ba' },
-                          { id: 'green', name: 'Forest Green', color: '#386a20' },
-                          { id: 'red', name: 'Crimson Red', color: '#ba1a1a' }
+                          { id: 'purple', name: 'Violent Violet', color: '#6750a4' },
+                          { id: 'blue', name: 'Depressed Denim', color: '#0f52ba' },
+                          { id: 'green', name: 'Grumpy Guacamole', color: '#386a20' },
+                          { id: 'red', name: 'Spicy Salsa', color: '#ba1a1a' }
                         ].map((pal) => (
                           <button
                             key={pal.id}
-                            title={pal.name}
                             onClick={() => {
                               setPalette(pal.id);
                               localStorage.setItem('theme-palette', pal.id);
                             }}
+                            className="m3-btn"
                             style={{
-                              width: '32px',
+                              borderColor: palette === pal.id ? pal.color : 'var(--border-color)',
+                              borderStyle: 'solid',
+                              borderWidth: palette === pal.id ? '2px' : '1px',
+                              color: pal.color,
+                              backgroundColor: palette === pal.id ? `${pal.color}18` : 'transparent',
+                              padding: '0 16px',
                               height: '32px',
-                              borderRadius: '50%',
-                              backgroundColor: pal.color,
-                              border: palette === pal.id ? '3px solid var(--text-main)' : '1px solid var(--border-color)',
-                              cursor: 'pointer',
-                              boxShadow: palette === pal.id ? '0 0 8px rgba(0,0,0,0.2)' : 'none',
-                              transition: 'all 0.2s',
-                              transform: palette === pal.id ? 'scale(1.1)' : 'scale(1)'
+                              fontSize: '0.85rem'
                             }}
-                          />
+                          >
+                            {pal.name}
+                          </button>
                         ))}
                       </div>
                     </div>
@@ -1223,15 +1109,18 @@ export default function App() {
                       <span style={{ fontSize: '1rem', fontWeight: 'bold' }}>
                         Enable Real-Time Clipboard Synchronization
                       </span>
-                      <md-switch
-                        ref={switchRef}
-                        onClick={(e: any) => {
-                          e.preventDefault();
+                      <button
+                        role="switch"
+                        aria-checked={clipAutoSync}
+                        onClick={() => {
                           const checked = !clipAutoSync;
                           setClipAutoSync(checked);
                           saveClipboardConfig(clipDirection, checked);
                         }}
-                      ></md-switch>
+                        className={`m3-switch ${clipAutoSync ? 'checked' : ''}`}
+                      >
+                        <span className="m3-switch-thumb"></span>
+                      </button>
                     </div>
 
                     {/* Sync Direction Configuration (Disabled if master is off) */}
@@ -1249,31 +1138,31 @@ export default function App() {
                       {/* Segmented Button Selection */}
                       <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
                         {clipDirection === 'bidirectional' ? (
-                          <md-filled-button onClick={() => { if (clipAutoSync) { setClipDirection('bidirectional'); saveClipboardConfig('bidirectional', clipAutoSync); } }}>
+                          <button className="m3-btn m3-btn-filled" onClick={() => { if (clipAutoSync) { setClipDirection('bidirectional'); saveClipboardConfig('bidirectional', clipAutoSync); } }}>
                             Bidirectional
-                          </md-filled-button>
+                          </button>
                         ) : (
-                          <md-outlined-button disabled={!clipAutoSync ? true : undefined} onClick={() => { if (clipAutoSync) { setClipDirection('bidirectional'); saveClipboardConfig('bidirectional', clipAutoSync); } }}>
+                          <button className="m3-btn m3-btn-outlined" disabled={!clipAutoSync} onClick={() => { if (clipAutoSync) { setClipDirection('bidirectional'); saveClipboardConfig('bidirectional', clipAutoSync); } }}>
                             Bidirectional
-                          </md-outlined-button>
+                          </button>
                         )}
                         {clipDirection === 'desktop_to_mobile' ? (
-                          <md-filled-button onClick={() => { if (clipAutoSync) { setClipDirection('desktop_to_mobile'); saveClipboardConfig('desktop_to_mobile', clipAutoSync); } }}>
+                          <button className="m3-btn m3-btn-filled" onClick={() => { if (clipAutoSync) { setClipDirection('desktop_to_mobile'); saveClipboardConfig('desktop_to_mobile', clipAutoSync); } }}>
                             Desktop to Mobile
-                          </md-filled-button>
+                          </button>
                         ) : (
-                          <md-outlined-button disabled={!clipAutoSync ? true : undefined} onClick={() => { if (clipAutoSync) { setClipDirection('desktop_to_mobile'); saveClipboardConfig('desktop_to_mobile', clipAutoSync); } }}>
+                          <button className="m3-btn m3-btn-outlined" disabled={!clipAutoSync} onClick={() => { if (clipAutoSync) { setClipDirection('desktop_to_mobile'); saveClipboardConfig('desktop_to_mobile', clipAutoSync); } }}>
                             Desktop to Mobile
-                          </md-outlined-button>
+                          </button>
                         )}
                         {clipDirection === 'mobile_to_desktop' ? (
-                          <md-filled-button onClick={() => { if (clipAutoSync) { setClipDirection('mobile_to_desktop'); saveClipboardConfig('mobile_to_desktop', clipAutoSync); } }}>
+                          <button className="m3-btn m3-btn-filled" onClick={() => { if (clipAutoSync) { setClipDirection('mobile_to_desktop'); saveClipboardConfig('mobile_to_desktop', clipAutoSync); } }}>
                             Mobile to Desktop
-                          </md-filled-button>
+                          </button>
                         ) : (
-                          <md-outlined-button disabled={!clipAutoSync ? true : undefined} onClick={() => { if (clipAutoSync) { setClipDirection('mobile_to_desktop'); saveClipboardConfig('mobile_to_desktop', clipAutoSync); } }}>
+                          <button className="m3-btn m3-btn-outlined" disabled={!clipAutoSync} onClick={() => { if (clipAutoSync) { setClipDirection('mobile_to_desktop'); saveClipboardConfig('mobile_to_desktop', clipAutoSync); } }}>
                             Mobile to Desktop
-                          </md-outlined-button>
+                          </button>
                         )}
                       </div>
                       

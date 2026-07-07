@@ -166,7 +166,7 @@ class ConnectionService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val customIp = intent?.getStringExtra("DAEMON_IP")
+        val customIp = intent?.getStringExtra("DAEMON_IP") ?: intent?.getStringExtra("CONNECT_IP")
         if (customIp != null) {
             updateDaemonUrl(customIp, 8080)
         }
@@ -174,6 +174,9 @@ class ConnectionService : Service() {
         if (checkBt) {
             isBluetoothConnectedCached = null // force update
             checkBluetoothConnectionToHost()
+            if (!isWsConnected) {
+                bootstrapConnectionViaBluetooth()
+            }
         }
         val triggerBootstrap = intent?.getBooleanExtra("TRIGGER_BOOTSTRAP", false) ?: false
         if (triggerBootstrap) {
@@ -215,7 +218,9 @@ class ConnectionService : Service() {
         sendPairingRequest()
 
         // Reconnect WebSocket with new URL
+        isWsConnected = false
         activeWebSocket?.close(1000, "Reconnecting to new host")
+        activeWebSocket = null
         connectWebSocket()
     }
 
@@ -513,6 +518,7 @@ class ConnectionService : Service() {
                                                         } else null
                                                     }
                                                 } catch (e: Exception) {
+                                                    Log.w(TAG, "Probing: IP $ip failed: ${e.message}")
                                                     null
                                                 }
                                             }

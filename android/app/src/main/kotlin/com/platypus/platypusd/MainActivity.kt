@@ -71,6 +71,7 @@ class MainActivity : ComponentActivity() {
     private val activeBtMacState = mutableStateOf<String?>(null)
     private val currentTabState = mutableStateOf("connection")
     private val isDarkModeState = mutableStateOf(true)
+    private val themePaletteState = mutableStateOf("auto")
 
     // Clipboard State
     private val sharedClipboardTextState = mutableStateOf("")
@@ -86,6 +87,8 @@ class MainActivity : ComponentActivity() {
     private val filesSearchQueryState = mutableStateOf("")
     private val filesSortByState = mutableStateOf("name") // "name", "size", "date"
     private val filesSortAscendingState = mutableStateOf(true)
+    private val isFileDownloadingState = mutableStateOf(false)
+    private val downloadProgressState = mutableStateOf("")
 
     // Dialog state
     private val activeDialogState = mutableStateOf<DialogType?>(null)
@@ -151,6 +154,7 @@ class MainActivity : ComponentActivity() {
         clipboardAutoSyncState.value = sharedPrefs.getBoolean("clipboard_auto_sync", true)
         clipboardDirectionState.value = sharedPrefs.getString("clipboard_direction", "bidirectional") ?: "bidirectional"
         selectedBtMacState.value = sharedPrefs.getString("selected_bluetooth_mac", null)
+        themePaletteState.value = sharedPrefs.getString("theme_palette", "auto") ?: "auto"
 
         startIntegrationService()
         checkPermissions()
@@ -158,7 +162,7 @@ class MainActivity : ComponentActivity() {
         handler.post(updateRunnable)
 
         setContent {
-            PlatypusTheme(darkTheme = isDarkModeState.value) {
+            PlatypusTheme(darkTheme = isDarkModeState.value, palette = themePaletteState.value) {
                 MainAppScreen()
             }
         }
@@ -351,22 +355,54 @@ class MainActivity : ComponentActivity() {
         })
     }
 
-    private fun downloadPcFile(path: String, fileName: String) {
+    private fun getMimeType(path: String): String? {
+        val extension = path.substringAfterLast('.', "").lowercase()
+        return if (extension.isNotEmpty()) {
+            android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
+        } else {
+            null
+        }
+    }
+
+    private fun openLocalFile(file: java.io.File) {
+        try {
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                this,
+                "com.platypus.platypusd.fileprovider",
+                file
+            )
+            val mime = getMimeType(file.absolutePath) ?: "*/*"
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, mime)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(intent)
+        } catch (e: Exception) {
+            runOnUiThread {
+                Toast.makeText(this, "No application found to open this file: ${e.message}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private fun downloadPcFile(path: String, fileName: String, shouldOpen: Boolean = false) {
         val sharedPrefs = getSharedPreferences("platypusd_prefs", Context.MODE_PRIVATE)
         val ip = sharedPrefs.getString("paired_host_ip", null)
         val port = sharedPrefs.getInt("paired_host_port", 8080)
         
         if (ip == null) return
         
+        isFileDownloadingState.value = true
+        downloadProgressState.value = fileName
+        
         val url = "http://$ip:$port/api/v1/files/download?path=${URLEncoder.encode(path, "UTF-8")}"
         val request = okhttp3.Request.Builder().url(url).build()
         val client = okhttp3.OkHttpClient()
         
-        Toast.makeText(this, "Downloading $fileName...", Toast.LENGTH_SHORT).show()
-        
         client.newCall(request).enqueue(object : okhttp3.Callback {
             override fun onFailure(call: okhttp3.Call, e: IOException) {
                 runOnUiThread {
+                    isFileDownloadingState.value = false
                     Toast.makeText(this@MainActivity, "Download failed: ${e.message}", Toast.LENGTH_SHORT).show()
                 }
             }
@@ -375,11 +411,15 @@ class MainActivity : ComponentActivity() {
                 response.use {
                     if (response.isSuccessful) {
                         val bytes = response.body?.bytes()
+                        runOnUiThread {
+                            isFileDownloadingState.value = false
+                        }
                         if (bytes != null) {
-                            saveDownloadedFile(fileName, bytes)
+                            saveDownloadedFile(fileName, bytes, shouldOpen)
                         }
                     } else {
                         runOnUiThread {
+                            isFileDownloadingState.value = false
                             Toast.makeText(this@MainActivity, "Download server error: ${response.code}", Toast.LENGTH_SHORT).show()
                         }
                     }
@@ -388,13 +428,19 @@ class MainActivity : ComponentActivity() {
         })
     }
 
-    private fun saveDownloadedFile(fileName: String, bytes: ByteArray) {
+    private fun saveDownloadedFile(fileName: String, bytes: ByteArray, shouldOpen: Boolean) {
         try {
             val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+            if (!downloadsDir.exists()) {
+                downloadsDir.mkdirs()
+            }
             val file = java.io.File(downloadsDir, fileName)
             file.writeBytes(bytes)
             runOnUiThread {
-                Toast.makeText(this, "Downloaded successfully to: ${file.absolutePath}", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "Saved to Downloads", Toast.LENGTH_SHORT).show()
+                if (shouldOpen) {
+                    openLocalFile(file)
+                }
             }
         } catch (e: Exception) {
             runOnUiThread {
@@ -1059,7 +1105,7 @@ class MainActivity : ComponentActivity() {
                                     if (isDir) {
                                         fetchPcFiles(path)
                                     } else {
-                                        activeDialogState.value = DialogType.FileActions(item)
+                                        downloadPcFile(path, name, shouldOpen = true)
                                     }
                                 }
                                 .padding(horizontal = 16.dp, vertical = 12.dp)
@@ -1200,6 +1246,107 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
+            // Theme Preferences Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("System Preferences", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "Theme Color Palette:",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    val palettes = listOf(
+                        "auto" to "Auto",
+                        "purple" to "Violent Violet",
+                        "blue" to "Depressed Denim",
+                        "green" to "Grumpy Guacamole",
+                        "red" to "Spicy Salsa"
+                    )
+
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            palettes.subList(0, 3).forEach { (id, name) ->
+                                val isSelected = themePaletteState.value == id
+                                val palColor = when (id) {
+                                    "purple" -> Color(0xFF6750A4)
+                                    "blue" -> Color(0xFF0F52BA)
+                                    "green" -> Color(0xFF386A20)
+                                    "red" -> Color(0xFFBA1A1A)
+                                    else -> MaterialTheme.colorScheme.primary
+                                }
+                                Button(
+                                    onClick = {
+                                        themePaletteState.value = id
+                                        sharedPrefs.edit().putString("theme_palette", id).apply()
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (isSelected) palColor else MaterialTheme.colorScheme.surface,
+                                        contentColor = if (isSelected) Color.White else palColor
+                                    ),
+                                    contentPadding = PaddingValues(vertical = 8.dp, horizontal = 4.dp),
+                                    border = if (isSelected) null else androidx.compose.foundation.BorderStroke(1.dp, palColor)
+                                ) {
+                                    Text(
+                                        text = name,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            palettes.subList(3, 5).forEach { (id, name) ->
+                                val isSelected = themePaletteState.value == id
+                                val palColor = when (id) {
+                                    "purple" -> Color(0xFF6750A4)
+                                    "blue" -> Color(0xFF0F52BA)
+                                    "green" -> Color(0xFF386A20)
+                                    "red" -> Color(0xFFBA1A1A)
+                                    else -> MaterialTheme.colorScheme.primary
+                                }
+                                Button(
+                                    onClick = {
+                                        themePaletteState.value = id
+                                        sharedPrefs.edit().putString("theme_palette", id).apply()
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (isSelected) palColor else MaterialTheme.colorScheme.surface,
+                                        contentColor = if (isSelected) Color.White else palColor
+                                    ),
+                                    contentPadding = PaddingValues(vertical = 8.dp, horizontal = 4.dp),
+                                    border = if (isSelected) null else androidx.compose.foundation.BorderStroke(1.dp, palColor)
+                                ) {
+                                    Text(
+                                        text = name,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.weight(1f))
+                        }
+                    }
+                }
+            }
+
             // Call sync Card
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -1258,6 +1405,35 @@ class MainActivity : ComponentActivity() {
     @Composable
     fun DialogManager() {
         var activeDialog by activeDialogState
+
+        if (isFileDownloadingState.value) {
+            androidx.compose.ui.window.Dialog(onDismissRequest = {}) {
+                Surface(
+                    shape = MaterialTheme.shapes.medium,
+                    color = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 6.dp,
+                    modifier = Modifier.padding(24.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                        Text(
+                            text = "Retrieving file from PC...",
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = downloadProgressState.value,
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
 
         when (val dialog = activeDialog) {
             is DialogType.ManualPairing -> {
@@ -1378,41 +1554,129 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun PlatypusTheme(
     darkTheme: Boolean = true,
-    dynamicColor: Boolean = true,
+    palette: String = "auto",
     content: @Composable () -> Unit
 ) {
     val context = LocalContext.current
     val colorScheme = when {
-        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
+        palette == "auto" && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
         }
-        darkTheme -> {
-            darkColorScheme(
-                primary = Color(0xFFD0BCFF), // M3 Pastel Violet Accent
-                onPrimary = Color(0xFF381E72),
-                background = Color(0xFF0F0E13), // Deep Purple Tint
-                surface = Color(0xFF25232A),
-                surfaceVariant = Color(0xFF1D1B20),
-                onBackground = Color(0xFFE6E1E5),
-                onSurface = Color(0xFFE6E1E5),
-                surfaceContainer = Color(0xFF1D1B20),
-                surfaceContainerHigh = Color(0xFF322F37),
-                outlineVariant = Color(0xFF49454F)
-            )
+        palette == "purple" || (palette == "auto" && Build.VERSION.SDK_INT < Build.VERSION_CODES.S) -> {
+            if (darkTheme) {
+                darkColorScheme(
+                    primary = Color(0xFFD0BCFF), // M3 Pastel Violet Accent
+                    onPrimary = Color(0xFF381E72),
+                    background = Color(0xFF0F0E13), // Deep Purple Tint
+                    surface = Color(0xFF25232A),
+                    surfaceVariant = Color(0xFF1D1B20),
+                    onBackground = Color(0xFFE6E1E5),
+                    onSurface = Color(0xFFE6E1E5),
+                    surfaceContainer = Color(0xFF1D1B20),
+                    surfaceContainerHigh = Color(0xFF322F37),
+                    outlineVariant = Color(0xFF49454F)
+                )
+            } else {
+                lightColorScheme(
+                    primary = Color(0xFF6750A4), // M3 Deep Purple Accent
+                    onPrimary = Color.White,
+                    background = Color(0xFFFBF8FD), // Light Lavender Tint
+                    surface = Color(0xFFFFFFFF),
+                    surfaceVariant = Color(0xFFF3EDF7),
+                    onBackground = Color(0xFF1D1B20),
+                    onSurface = Color(0xFF1D1B20),
+                    surfaceContainer = Color(0xFFF3EDF7),
+                    surfaceContainerHigh = Color(0xFFEADBFF),
+                    outlineVariant = Color(0xFFE6E0E9)
+                )
+            }
         }
-        else -> {
-            lightColorScheme(
-                primary = Color(0xFF6750A4), // M3 Deep Purple Accent
-                onPrimary = Color.White,
-                background = Color(0xFFFBF8FD), // Light Lavender Tint
-                surface = Color(0xFFFFFFFF),
-                surfaceVariant = Color(0xFFF3EDF7),
-                onBackground = Color(0xFF1D1B20),
-                onSurface = Color(0xFF1D1B20),
-                surfaceContainer = Color(0xFFF3EDF7),
-                surfaceContainerHigh = Color(0xFFEADBFF),
-                outlineVariant = Color(0xFFE6E0E9)
-            )
+        palette == "blue" -> {
+            if (darkTheme) {
+                darkColorScheme(
+                    primary = Color(0xFFA8C7FA),
+                    onPrimary = Color(0xFF062E6F),
+                    background = Color(0xFF0B0D11),
+                    surface = Color(0xFF181B21),
+                    surfaceVariant = Color(0xFF13161C),
+                    onBackground = Color(0xFFE6E1E5),
+                    onSurface = Color(0xFFE6E1E5),
+                    surfaceContainer = Color(0xFF13161C),
+                    surfaceContainerHigh = Color(0xFF1D212A),
+                    outlineVariant = Color(0xFF2F333A)
+                )
+            } else {
+                lightColorScheme(
+                    primary = Color(0xFF0F52BA),
+                    onPrimary = Color.White,
+                    background = Color(0xFFF8F9FF),
+                    surface = Color(0xFFFFFFFF),
+                    surfaceVariant = Color(0xFFEDF0F9),
+                    onBackground = Color(0xFF1B1B1F),
+                    onSurface = Color(0xFF1B1B1F),
+                    surfaceContainer = Color(0xFFEDF0F9),
+                    surfaceContainerHigh = Color(0xFFDBE3F8),
+                    outlineVariant = Color(0xFFDBE3F8)
+                )
+            }
+        }
+        palette == "green" -> {
+            if (darkTheme) {
+                darkColorScheme(
+                    primary = Color(0xFF9CD67D),
+                    onPrimary = Color(0xFF0B3900),
+                    background = Color(0xFF0F100E),
+                    surface = Color(0xFF252822),
+                    surfaceVariant = Color(0xFF1D1F1B),
+                    onBackground = Color(0xFFE2E3DD),
+                    onSurface = Color(0xFFE2E3DD),
+                    surfaceContainer = Color(0xFF1D1F1B),
+                    surfaceContainerHigh = Color(0xFF2D3228),
+                    outlineVariant = Color(0xFF43483F)
+                )
+            } else {
+                lightColorScheme(
+                    primary = Color(0xFF386A20),
+                    onPrimary = Color.White,
+                    background = Color(0xFFF6FBF2),
+                    surface = Color(0xFFFFFFFF),
+                    surfaceVariant = Color(0xFFEEF4E8),
+                    onBackground = Color(0xFF191C18),
+                    onSurface = Color(0xFF191C18),
+                    surfaceContainer = Color(0xFFEEF4E8),
+                    surfaceContainerHigh = Color(0xFFE0E4DB),
+                    outlineVariant = Color(0xFFE0E4DB)
+                )
+            }
+        }
+        else -> { // red
+            if (darkTheme) {
+                darkColorScheme(
+                    primary = Color(0xFFFFB4AB),
+                    onPrimary = Color(0xFF690005),
+                    background = Color(0xFF140F0E),
+                    surface = Color(0xFF2F2120),
+                    surfaceVariant = Color(0xFF261B1A),
+                    onBackground = Color(0xFFEDE0DE),
+                    onSurface = Color(0xFFEDE0DE),
+                    surfaceContainer = Color(0xFF261B1A),
+                    surfaceContainerHigh = Color(0xFF3B2A28),
+                    outlineVariant = Color(0xFF534341)
+                )
+            } else {
+                lightColorScheme(
+                    primary = Color(0xFFBA1A1A),
+                    onPrimary = Color.White,
+                    background = Color(0xFFFFF5F5),
+                    surface = Color(0xFFFFFFFF),
+                    surfaceVariant = Color(0xFFFCEAE9),
+                    onBackground = Color(0xFF201A19),
+                    onSurface = Color(0xFF201A19),
+                    surfaceContainer = Color(0xFFFCEAE9),
+                    surfaceContainerHigh = Color(0xFFF5DAD7),
+                    outlineVariant = Color(0xFFF5DAD7)
+                )
+            }
         }
     }
 

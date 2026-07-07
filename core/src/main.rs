@@ -71,6 +71,7 @@ async fn main() -> anyhow::Result<()> {
     // Periodically poll connected Bluetooth devices and update active_bluetooth state
     let db_clone = app_state.db.clone();
     let active_bt_clone = app_state.active_bluetooth.clone();
+    let active_connections_clone = app_state.active_connections.clone();
     let tx_clone = app_state.tx.clone();
     tokio::spawn(async move {
         loop {
@@ -79,8 +80,12 @@ async fn main() -> anyhow::Result<()> {
             let connected_bt = services::bluetooth::check_bluetooth_connected_devices();
             let paired = db_clone.get_paired_devices().await.unwrap_or_default();
             
+            let active_connections = active_connections_clone.lock().await;
             let mut active_bt = active_bt_clone.lock().await;
             for (id, name) in paired {
+                if active_connections.contains(&id) {
+                    continue;
+                }
                 let is_connected_now = connected_bt.iter().any(|(_, bt_name)| {
                     bt_name.to_lowercase().contains(&name.to_lowercase()) || name.to_lowercase().contains(&bt_name.to_lowercase())
                 });
