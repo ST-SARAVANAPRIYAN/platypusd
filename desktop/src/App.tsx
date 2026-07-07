@@ -452,8 +452,9 @@ export default function App() {
         
         {/* Sidebar Navigation */}
         <aside className="app-sidebar">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.50rem', padding: '0.25rem 0.25rem' }}>
-            <h1 style={{ fontSize: '1.25rem', margin: 0, letterSpacing: '-0.02em', fontWeight: 'bold' }}>platypusd</h1>
+          <div className="sidebar-title-container">
+            <span className="sidebar-logo">P</span>
+            <h1 className="sidebar-title-text">platypusd</h1>
           </div>
           
           <nav className="sidebar-nav">
@@ -461,25 +462,29 @@ export default function App() {
               className={`sidebar-btn ${activeTab === 'dashboard' ? 'active' : ''}`} 
               onClick={() => setActiveTab('dashboard')}
             >
-              Dashboard
+              <span className="btn-icon">D</span>
+              <span className="btn-text">Dashboard</span>
             </button>
             <button 
               className={`sidebar-btn ${activeTab === 'clipboard' ? 'active' : ''}`} 
               onClick={() => setActiveTab('clipboard')}
             >
-              Clipboard Sync
+              <span className="btn-icon">C</span>
+              <span className="btn-text">Clipboard Sync</span>
             </button>
             <button 
               className={`sidebar-btn ${activeTab === 'files' ? 'active' : ''}`} 
               onClick={() => setActiveTab('files')}
             >
-              File Explorer
+              <span className="btn-icon">F</span>
+              <span className="btn-text">File Explorer</span>
             </button>
             <button 
               className={`sidebar-btn ${activeTab === 'settings' ? 'active' : ''}`} 
               onClick={() => setActiveTab('settings')}
             >
-              Settings
+              <span className="btn-icon">S</span>
+              <span className="btn-text">Settings</span>
             </button>
           </nav>
         </aside>

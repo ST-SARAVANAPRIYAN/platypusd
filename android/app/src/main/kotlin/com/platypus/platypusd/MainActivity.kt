@@ -138,22 +138,39 @@ class MainActivity : AppCompatActivity() {
         return android.graphics.drawable.GradientDrawable().apply {
             shape = android.graphics.drawable.GradientDrawable.RECTANGLE
             setColor(backgroundColor)
-            if (borderWidthPx > 0) {
-                setStroke(2, borderColor) // Force thin stroke (2px)
+            
+            // Material 3/Pixel OS: Outlined components use thin 1dp borders, contained/flat components use 0 borders
+            if (borderWidthPx > 0 && borderColor != Color.TRANSPARENT) {
+                val density = resources.displayMetrics.density
+                val strokeWidth = Math.max(1, (1 * density).toInt()) // thin 1dp stroke
+                setStroke(strokeWidth, getThemeColor(darkBorder, lightBorder))
+            } else {
+                setStroke(0, Color.TRANSPARENT)
             }
+            
             cornerRadius = radius
         }
     }
 
     private fun initLayout() {
+        // Set window background dynamically to match the current theme background
+        window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(getThemeColor(darkBg, lightBg)))
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             window.statusBarColor = getThemeColor(darkBg, lightBg)
+            window.navigationBarColor = getThemeColor(darkBg, lightBg)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 var flags = window.decorView.systemUiVisibility
-                flags = if (isDarkMode) {
-                    flags and View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR.inv()
+                if (isDarkMode) {
+                    flags = flags and View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR.inv()
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        flags = flags and View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR.inv()
+                    }
                 } else {
-                    flags or View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+                    flags = flags or View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        flags = flags or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+                    }
                 }
                 window.decorView.systemUiVisibility = flags
             }

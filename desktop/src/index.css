@@ -346,16 +346,23 @@ header {
 
 /* Docked Sidebar Navigation */
 .app-sidebar {
-  width: 260px;
+  width: 75px;
   flex-shrink: 0;
   height: 100%;
   background-color: var(--bg-secondary);
   border-right: 1px solid var(--border-color);
-  padding: 2.5rem 1.5rem;
+  padding: 2.5rem 0; /* No horizontal padding on container */
   display: flex;
   flex-direction: column;
   gap: 2rem;
   box-shadow: 2px 0 10px rgba(0, 0, 0, 0.03);
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: hidden;
+  z-index: 10;
+}
+
+.app-sidebar:hover {
+  width: 260px;
 }
 
 .sidebar-nav {
@@ -369,7 +376,9 @@ header {
   background: transparent;
   border: none;
   color: var(--text-muted);
-  padding: 0.85rem 1.25rem;
+  padding: 0.85rem 0;
+  margin: 0 10px; /* Margin around the pill */
+  width: calc(100% - 20px);
   font-family: inherit;
   font-weight: 600;
   font-size: 0.95rem;
@@ -377,10 +386,7 @@ header {
   cursor: pointer;
   transition: all var(--transition-speed) var(--transition-bezier);
   display: flex;
-  justify-content: flex-start;
   align-items: center;
-  gap: 0.75rem;
-  width: 100%;
   text-align: left;
 }
 
@@ -392,6 +398,78 @@ header {
 .sidebar-btn:hover:not(.active) {
   color: var(--text-main);
   background-color: rgba(168, 199, 250, 0.12);
+}
+
+.btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  font-weight: 800;
+  font-size: 0.85rem;
+  background: var(--bg-primary);
+  color: var(--text-muted);
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  flex-shrink: 0;
+  margin-left: 15.5px; /* (55px - 24px)/2 = 15.5px to center in collapsed state */
+  margin-right: 15px;
+  transition: background-color var(--transition-speed), color var(--transition-speed);
+}
+
+.sidebar-btn.active .btn-icon {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+.btn-text {
+  opacity: 0;
+  transition: opacity 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  white-space: nowrap;
+}
+
+.app-sidebar:hover .btn-text {
+  opacity: 1;
+}
+
+.sidebar-title-container {
+  display: flex;
+  align-items: center;
+  width: calc(100% - 20px);
+  margin: 0 10px;
+  overflow: hidden;
+}
+
+.sidebar-title-text {
+  opacity: 0;
+  transition: opacity 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  font-size: 1.25rem;
+  margin: 0;
+  letter-spacing: -0.02em;
+  font-weight: bold;
+  white-space: nowrap;
+}
+
+.app-sidebar:hover .sidebar-title-text {
+  opacity: 1;
+}
+
+.sidebar-logo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  background: var(--accent);
+  color: white;
+  font-weight: 900;
+  font-size: 1.2rem;
+  border-radius: 8px;
+  flex-shrink: 0;
+  margin-left: 11.5px; /* (55px - 32px)/2 = 11.5px to center in collapsed state */
+  margin-right: 15px;
 }
 
 /* Independent Scrolling Content Pane */
