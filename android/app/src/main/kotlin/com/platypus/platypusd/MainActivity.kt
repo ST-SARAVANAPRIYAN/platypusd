@@ -31,6 +31,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -1377,34 +1378,42 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun PlatypusTheme(
     darkTheme: Boolean = true,
+    dynamicColor: Boolean = true,
     content: @Composable () -> Unit
 ) {
-    val colorScheme = if (darkTheme) {
-        darkColorScheme(
-            primary = Color(0xFFD0BCFF), // M3 Pastel Violet Accent
-            onPrimary = Color(0xFF381E72),
-            background = Color(0xFF0F0E13), // Deep Purple Tint
-            surface = Color(0xFF25232A),
-            surfaceVariant = Color(0xFF1D1B20),
-            onBackground = Color(0xFFE6E1E5),
-            onSurface = Color(0xFFE6E1E5),
-            surfaceContainer = Color(0xFF1D1B20),
-            surfaceContainerHigh = Color(0xFF322F37),
-            outlineVariant = Color(0xFF49454F)
-        )
-    } else {
-        lightColorScheme(
-            primary = Color(0xFF6750A4), // M3 Deep Purple Accent
-            onPrimary = Color.White,
-            background = Color(0xFFFBF8FD), // Light Lavender Tint
-            surface = Color(0xFFFFFFFF),
-            surfaceVariant = Color(0xFFF3EDF7),
-            onBackground = Color(0xFF1D1B20),
-            onSurface = Color(0xFF1D1B20),
-            surfaceContainer = Color(0xFFF3EDF7),
-            surfaceContainerHigh = Color(0xFFEADBFF),
-            outlineVariant = Color(0xFFE6E0E9)
-        )
+    val context = LocalContext.current
+    val colorScheme = when {
+        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
+            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+        }
+        darkTheme -> {
+            darkColorScheme(
+                primary = Color(0xFFD0BCFF), // M3 Pastel Violet Accent
+                onPrimary = Color(0xFF381E72),
+                background = Color(0xFF0F0E13), // Deep Purple Tint
+                surface = Color(0xFF25232A),
+                surfaceVariant = Color(0xFF1D1B20),
+                onBackground = Color(0xFFE6E1E5),
+                onSurface = Color(0xFFE6E1E5),
+                surfaceContainer = Color(0xFF1D1B20),
+                surfaceContainerHigh = Color(0xFF322F37),
+                outlineVariant = Color(0xFF49454F)
+            )
+        }
+        else -> {
+            lightColorScheme(
+                primary = Color(0xFF6750A4), // M3 Deep Purple Accent
+                onPrimary = Color.White,
+                background = Color(0xFFFBF8FD), // Light Lavender Tint
+                surface = Color(0xFFFFFFFF),
+                surfaceVariant = Color(0xFFF3EDF7),
+                onBackground = Color(0xFF1D1B20),
+                onSurface = Color(0xFF1D1B20),
+                surfaceContainer = Color(0xFFF3EDF7),
+                surfaceContainerHigh = Color(0xFFEADBFF),
+                outlineVariant = Color(0xFFE6E0E9)
+            )
+        }
     }
 
     MaterialTheme(
