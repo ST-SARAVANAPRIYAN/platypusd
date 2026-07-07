@@ -448,70 +448,62 @@ export default function App() {
   const isBluetoothConnected = connectedDevices.some(d => d.is_bluetooth_connected);
   return (
     <div className={`theme-root ${theme}-mode`}>
-      <div className={`container ${activeTab === 'files' ? 'full-width-explorer' : ''}`}>
-        <header>
-          <h1>platypusd platform</h1>
-          <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+      <div className={`container ${activeTab === 'files' ? 'full-width-explorer' : ''}`} style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-start', gap: '2rem', width: '100%' }}>
+        
+        {/* Sidebar Navigation */}
+        <aside className="card" style={{ width: '240px', flexShrink: 0, padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.5rem', height: 'fit-content' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.50rem', padding: '0 0.25rem' }}>
+            <span style={{ fontSize: '1.5rem' }}>🪐</span>
+            <h1 style={{ fontSize: '1.25rem', margin: 0, letterSpacing: '-0.02em', fontWeight: 'bold' }}>platypusd</h1>
+          </div>
+          
+          <nav style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
             <button 
-              className="btn btn-secondary btn-sm" 
-              onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
+              className={`tab-btn ${activeTab === 'dashboard' ? 'active' : ''}`} 
+              onClick={() => setActiveTab('dashboard')}
+              style={{ width: '100%', justifyContent: 'flex-start', padding: '0.8rem 1.25rem', borderRadius: '14px' }}
             >
-              {theme === 'light' ? 'Dark Theme' : 'Light Theme'}
+              Dashboard
             </button>
-            <div className={`status-badge ${isDaemonOnline ? 'online' : 'offline'}`}>
-              <span style={{ 
-                width: '8px', 
-                height: '8px', 
-                borderRadius: '50%', 
-                background: isDaemonOnline ? 'var(--success)' : 'var(--danger)',
-                display: 'inline-block',
-                marginRight: '0.25rem'
-              }}></span>
-              {isDaemonOnline ? 'Daemon Online' : 'Daemon Offline'}
+            <button 
+              className={`tab-btn ${activeTab === 'clipboard' ? 'active' : ''}`} 
+              onClick={() => setActiveTab('clipboard')}
+              style={{ width: '100%', justifyContent: 'flex-start', padding: '0.8rem 1.25rem', borderRadius: '14px' }}
+            >
+              Clipboard Sync
+            </button>
+            <button 
+              className={`tab-btn ${activeTab === 'files' ? 'active' : ''}`} 
+              onClick={() => setActiveTab('files')}
+              style={{ width: '100%', justifyContent: 'flex-start', padding: '0.8rem 1.25rem', borderRadius: '14px' }}
+            >
+              File Explorer
+            </button>
+            <button 
+              className={`tab-btn ${activeTab === 'settings' ? 'active' : ''}`} 
+              onClick={() => setActiveTab('settings')}
+              style={{ width: '100%', justifyContent: 'flex-start', padding: '0.8rem 1.25rem', borderRadius: '14px' }}
+            >
+              Settings
+            </button>
+          </nav>
+        </aside>
+
+        {/* Main Content Area */}
+        <main style={{ flexGrow: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+          
+          {error && !isDaemonOnline && (
+            <div className="card" style={{ borderColor: 'var(--danger)', backgroundColor: 'var(--danger-container)' }}>
+              <h2 style={{ color: 'var(--danger)' }}>Connection Error</h2>
+              <p>{error}</p>
+              <button className="btn btn-secondary" style={{ marginTop: '1rem' }} onClick={fetchStatus}>
+                Retry Connection
+              </button>
             </div>
-          </div>
-        </header>
+          )}
 
-        {/* Dashboard Tabs */}
-        <div className="tab-bar">
-          <button 
-            className={`tab-btn ${activeTab === 'dashboard' ? 'active' : ''}`} 
-            onClick={() => setActiveTab('dashboard')}
-          >
-            Dashboard
-          </button>
-          <button 
-            className={`tab-btn ${activeTab === 'clipboard' ? 'active' : ''}`} 
-            onClick={() => setActiveTab('clipboard')}
-          >
-            Clipboard Sync
-          </button>
-          <button 
-            className={`tab-btn ${activeTab === 'files' ? 'active' : ''}`} 
-            onClick={() => setActiveTab('files')}
-          >
-            File Explorer
-          </button>
-          <button 
-            className={`tab-btn ${activeTab === 'settings' ? 'active' : ''}`} 
-            onClick={() => setActiveTab('settings')}
-          >
-            Settings
-          </button>
-        </div>
-
-        {error && !isDaemonOnline && (
-          <div className="card" style={{ borderColor: 'var(--danger)', backgroundColor: 'var(--danger-container)' }}>
-            <h2 style={{ color: 'var(--danger)' }}>Connection Error</h2>
-            <p>{error}</p>
-            <button className="btn btn-secondary" style={{ marginTop: '1rem' }} onClick={fetchStatus}>
-              Retry Connection
-            </button>
-          </div>
-        )}
-
-        {status && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+          {status && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
             
             {activeTab === 'dashboard' && (
               <>
@@ -1130,6 +1122,38 @@ export default function App() {
 
             {activeTab === 'settings' && (
               <>
+                {/* System Preferences & Status Card */}
+                <div className="card" style={{ marginBottom: '1.5rem' }}>
+                  <h2>System Preferences & Status</h2>
+                  <div style={{ display: 'flex', gap: '2rem', alignItems: 'center', flexWrap: 'wrap', marginTop: '1rem' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                      <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)', fontWeight: 'bold' }}>Application Theme</span>
+                      <button 
+                        className="btn btn-secondary btn-sm" 
+                        onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
+                        style={{ alignSelf: 'flex-start' }}
+                      >
+                        {theme === 'light' ? 'Dark Theme' : 'Light Theme'}
+                      </button>
+                    </div>
+                    
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                      <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)', fontWeight: 'bold' }}>Service Status</span>
+                      <div className={`status-badge ${isDaemonOnline ? 'online' : 'offline'}`} style={{ alignSelf: 'flex-start', display: 'flex', alignItems: 'center' }}>
+                        <span style={{ 
+                          width: '8px', 
+                          height: '8px', 
+                          borderRadius: '50%', 
+                          background: isDaemonOnline ? 'var(--success)' : 'var(--danger)',
+                          display: 'inline-block',
+                          marginRight: '0.4rem'
+                        }}></span>
+                        {isDaemonOnline ? 'Daemon Online' : 'Daemon Offline'}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
                 <div className="card">
                   <h2>Clipboard Configurations</h2>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', marginTop: '1rem' }}>
@@ -1243,6 +1267,8 @@ export default function App() {
 
           </div>
         )}
+
+        </main>
 
         {/* Floating Toast Notification */}
         <div id="toast" className="toast-container">
