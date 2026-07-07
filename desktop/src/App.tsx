@@ -448,7 +448,7 @@ export default function App() {
   const isBluetoothConnected = connectedDevices.some(d => d.is_bluetooth_connected);
   return (
     <div className={`theme-root ${theme}-mode`}>
-      <div className={`container ${activeTab === 'files' ? 'full-width-explorer' : ''}`} style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-start', gap: '2rem', width: '100%' }}>
+      <div className={`container ${activeTab === 'files' ? 'full-width-explorer' : ''}`} style={{ alignItems: 'flex-start' }}>
         
         {/* Sidebar Navigation */}
         <aside className="card" style={{ width: '240px', flexShrink: 0, padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.5rem', height: 'fit-content' }}>
@@ -1165,24 +1165,11 @@ export default function App() {
                 </div>
 
                 <div className="card">
-                  <h2>Clipboard Configurations</h2>
+                  <h2>Clipboard Synchronization</h2>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', marginTop: '1rem' }}>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                      <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)', fontWeight: 'bold' }}>Sync Direction</span>
-                      <select 
-                        value={clipDirection} 
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setClipDirection(val);
-                          saveClipboardConfig(val, clipAutoSync);
-                        }}
-                      >
-                        <option value="bidirectional">Bidirectional (Sync both ways)</option>
-                        <option value="desktop_to_mobile">Desktop to Mobile Only</option>
-                        <option value="mobile_to_desktop">Mobile to Desktop Only</option>
-                      </select>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginTop: '0.25rem' }}>
+                    
+                    {/* Master Auto Sync Toggle */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                       <input 
                         type="checkbox" 
                         id="auto-sync-checkbox"
@@ -1193,16 +1180,76 @@ export default function App() {
                           saveClipboardConfig(clipDirection, checked);
                         }}
                         style={{
-                          width: '18px',
-                          height: '18px',
+                          width: '20px',
+                          height: '20px',
                           cursor: 'pointer',
                           accentColor: 'var(--accent)'
                         }}
                       />
-                      <label htmlFor="auto-sync-checkbox" style={{ fontSize: '0.95rem', cursor: 'pointer', userSelect: 'none', fontWeight: 'bold' }}>
-                        Automatically sync copies in real-time
+                      <label htmlFor="auto-sync-checkbox" style={{ fontSize: '1rem', cursor: 'pointer', userSelect: 'none', fontWeight: 'bold' }}>
+                        Enable Real-Time Clipboard Synchronization
                       </label>
                     </div>
+
+                    {/* Sync Direction Configuration (Disabled if master is off) */}
+                    <div style={{ 
+                      display: 'flex', 
+                      flexDirection: 'column', 
+                      gap: '0.75rem', 
+                      marginTop: '0.5rem',
+                      opacity: clipAutoSync ? 1 : 0.4,
+                      pointerEvents: clipAutoSync ? 'auto' : 'none',
+                      transition: 'opacity 0.2s'
+                    }}>
+                      <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)', fontWeight: 'bold' }}>Sync Direction Flow</span>
+                      
+                      {/* Segmented Button Selection */}
+                      <div style={{ display: 'flex', gap: '0.5rem', background: 'var(--bg-primary)', padding: '4px', borderRadius: '10px', border: '1px solid var(--border-color)', width: 'fit-content' }}>
+                        <button 
+                          className={`btn btn-sm ${clipDirection === 'bidirectional' ? 'btn-primary' : 'btn-secondary'}`}
+                          style={{ padding: '0.5rem 1rem', borderRadius: '8px' }}
+                          onClick={() => {
+                            if (clipAutoSync) {
+                              setClipDirection('bidirectional');
+                              saveClipboardConfig('bidirectional', clipAutoSync);
+                            }
+                          }}
+                        >
+                          Bidirectional
+                        </button>
+                        <button 
+                          className={`btn btn-sm ${clipDirection === 'desktop_to_mobile' ? 'btn-primary' : 'btn-secondary'}`}
+                          style={{ padding: '0.5rem 1rem', borderRadius: '8px' }}
+                          onClick={() => {
+                            if (clipAutoSync) {
+                              setClipDirection('desktop_to_mobile');
+                              saveClipboardConfig('desktop_to_mobile', clipAutoSync);
+                            }
+                          }}
+                        >
+                          Send Only
+                        </button>
+                        <button 
+                          className={`btn btn-sm ${clipDirection === 'mobile_to_desktop' ? 'btn-primary' : 'btn-secondary'}`}
+                          style={{ padding: '0.5rem 1rem', borderRadius: '8px' }}
+                          onClick={() => {
+                            if (clipAutoSync) {
+                              setClipDirection('mobile_to_desktop');
+                              saveClipboardConfig('mobile_to_desktop', clipAutoSync);
+                            }
+                          }}
+                        >
+                          Receive Only
+                        </button>
+                      </div>
+                      
+                      <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                        {clipDirection === 'bidirectional' && "Copies on either device will automatically sync to the other."}
+                        {clipDirection === 'desktop_to_mobile' && "Copies on this PC are sent to your mobile device, but mobile copies are ignored."}
+                        {clipDirection === 'mobile_to_desktop' && "Copies on your mobile device are pulled to this PC, but PC copies are ignored."}
+                      </p>
+                    </div>
+
                   </div>
                 </div>
 
