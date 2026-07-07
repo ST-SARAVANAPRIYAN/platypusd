@@ -245,6 +245,11 @@ md-filled-button, md-outlined-button, md-text-button, md-switch, md-checkbox {
 
 md-filled-button, md-outlined-button, md-text-button {
   min-width: max-content;
+  flex-shrink: 0;
+  --md-filled-button-leading-space: 20px;
+  --md-filled-button-trailing-space: 20px;
+  --md-outlined-button-leading-space: 20px;
+  --md-outlined-button-trailing-space: 20px;
 }
 
 .container {
