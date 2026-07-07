@@ -1200,7 +1200,7 @@ export default function App() {
                       <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)', fontWeight: 'bold' }}>Sync Direction Flow</span>
                       
                       {/* Segmented Button Selection */}
-                      <div style={{ display: 'flex', gap: '0.5rem', background: 'var(--bg-secondary)', padding: '4px', borderRadius: '100px', border: '1px solid var(--border-color)', width: 'fit-content' }}>
+                      <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
                         {clipDirection === 'bidirectional' ? (
                           <md-filled-button onClick={() => { if (clipAutoSync) { setClipDirection('bidirectional'); saveClipboardConfig('bidirectional', clipAutoSync); } }}>
                             Bidirectional

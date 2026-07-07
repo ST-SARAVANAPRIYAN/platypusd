@@ -17,19 +17,19 @@
   --md-sys-color-on-surface-variant: var(--text-muted);
 }
 
-/* Light Theme: Android 16 Pastel Glassmorphism */
+/* Light Theme: Material 3 Purple / Lavender */
 .light-mode {
-  --bg-primary: #f0f4f9;
-  --bg-secondary: #eceff4;
+  --bg-primary: #fbf8fd;
+  --bg-secondary: #f3edf7;
   --bg-card: #ffffff;
-  --border-color: #e1e3e8;
+  --border-color: #e6e0e9;
   --text-main: #1d1b20;
   --text-muted: #49454f;
   
-  --accent: #0f52ba; /* Platypus Blue */
-  --accent-container: #d3e3fd;
+  --accent: #6750a4; /* M3 Deep Purple */
+  --accent-container: #eaddff;
   --text-accent: #ffffff;
-  --text-accent-container: #041e49;
+  --text-accent-container: #21005d;
 
   --success: #146c43;
   --success-container: #d1e7dd;
@@ -42,19 +42,19 @@
   --shadow-hover: 0 4px 12px rgba(0, 0, 0, 0.08);
 }
 
-/* Dark Theme: Android 16 Dark Nebula */
+/* Dark Theme: Material 3 Dark Orchid */
 .dark-mode {
-  --bg-primary: #0b0d11;
-  --bg-secondary: #13161c;
-  --bg-card: #181b21;
-  --border-color: #2f333a;
+  --bg-primary: #0f0e13;
+  --bg-secondary: #1d1b20;
+  --bg-card: #25232a;
+  --border-color: #49454f;
   --text-main: #e6e1e5;
   --text-muted: #cac4d0;
   
-  --accent: #a8c7fa; /* Pastel Android Blue */
-  --accent-container: #0842a0;
-  --text-accent: #062e6f;
-  --text-accent-container: #d3e3fd;
+  --accent: #d0bcff; /* M3 Pastel Violet */
+  --accent-container: #4f378b;
+  --text-accent: #381e72;
+  --text-accent-container: #eaddff;
 
   --success: #6ddb9c;
   --success-container: #00391c;

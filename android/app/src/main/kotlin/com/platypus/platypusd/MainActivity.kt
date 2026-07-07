@@ -1381,29 +1381,29 @@ fun PlatypusTheme(
 ) {
     val colorScheme = if (darkTheme) {
         darkColorScheme(
-            primary = Color(0xFF0F52BA), // Classic Platypus Blue Accent
-            onPrimary = Color.White,
-            background = Color(0xFF0B0D11),
-            surface = Color(0xFF181B21),
-            surfaceVariant = Color(0xFF242932),
+            primary = Color(0xFFD0BCFF), // M3 Pastel Violet Accent
+            onPrimary = Color(0xFF381E72),
+            background = Color(0xFF0F0E13), // Deep Purple Tint
+            surface = Color(0xFF25232A),
+            surfaceVariant = Color(0xFF1D1B20),
             onBackground = Color(0xFFE6E1E5),
             onSurface = Color(0xFFE6E1E5),
-            surfaceContainer = Color(0xFF13161C),
-            surfaceContainerHigh = Color(0xFF1D212A),
-            outlineVariant = Color(0xFF2F333A)
+            surfaceContainer = Color(0xFF1D1B20),
+            surfaceContainerHigh = Color(0xFF322F37),
+            outlineVariant = Color(0xFF49454F)
         )
     } else {
         lightColorScheme(
-            primary = Color(0xFF0F52BA),
+            primary = Color(0xFF6750A4), // M3 Deep Purple Accent
             onPrimary = Color.White,
-            background = Color(0xFFF0F4F9),
+            background = Color(0xFFFBF8FD), // Light Lavender Tint
             surface = Color(0xFFFFFFFF),
-            surfaceVariant = Color(0xFFF0F4F9),
+            surfaceVariant = Color(0xFFF3EDF7),
             onBackground = Color(0xFF1D1B20),
             onSurface = Color(0xFF1D1B20),
-            surfaceContainer = Color(0xFFE1E3E8),
-            surfaceContainerHigh = Color(0xFFECEFF4),
-            outlineVariant = Color(0xFFE1E3E8)
+            surfaceContainer = Color(0xFFF3EDF7),
+            surfaceContainerHigh = Color(0xFFEADBFF),
+            outlineVariant = Color(0xFFE6E0E9)
         )
     }
 
