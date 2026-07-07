@@ -452,8 +452,7 @@ export default function App() {
         
         {/* Sidebar Navigation */}
         <aside className="card" style={{ width: '240px', flexShrink: 0, padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.5rem', height: 'fit-content' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.50rem', padding: '0 0.25rem' }}>
-            <span style={{ fontSize: '1.5rem' }}>🪐</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.50rem', padding: '0.25rem 0.25rem' }}>
             <h1 style={{ fontSize: '1.25rem', margin: 0, letterSpacing: '-0.02em', fontWeight: 'bold' }}>platypusd</h1>
           </div>
           
@@ -1039,8 +1038,8 @@ export default function App() {
                                         onClick={() => handleFileClick(file)}
                                       >
                                         {file.is_dir ? (
-                                          <div style={{ height: '70px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '2.5rem', color: 'var(--accent)' }}>
-                                            📁
+                                          <div style={{ height: '70px', width: '100%', background: 'var(--accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', fontSize: '0.8rem', borderRadius: '4px', border: '1px solid var(--border-color)', color: 'white' }}>
+                                            FOLDER
                                           </div>
                                         ) : isImage && phoneIp ? (
                                           <img 
@@ -1095,7 +1094,18 @@ export default function App() {
                                       className="file-item-hover"
                                       onClick={() => handleFileClick(file)}
                                     >
-                                      <span style={{ fontSize: '0.85rem' }}>{file.is_dir ? '📁' : '📄'}</span>
+                                      <span style={{ 
+                                        padding: '0.15rem 0.35rem', 
+                                        fontSize: '0.65rem', 
+                                        background: file.is_dir ? 'var(--accent)' : 'var(--bg-secondary)', 
+                                        color: file.is_dir ? 'white' : 'var(--text-main)', 
+                                        borderRadius: '3px',
+                                        border: '1px solid var(--border-color)',
+                                        fontWeight: 'bold',
+                                        textTransform: 'uppercase'
+                                      }}>
+                                        {file.is_dir ? 'Dir' : 'File'}
+                                      </span>
                                       <span style={{ fontSize: '0.75rem', fontWeight: '500', flexGrow: 1, textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
                                         {file.name}
                                       </span>

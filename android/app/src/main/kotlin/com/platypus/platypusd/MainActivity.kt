@@ -220,7 +220,7 @@ class MainActivity : AppCompatActivity() {
         tabContainer.addView(settingsTabBtn)
 
         val tabParams = RelativeLayout.LayoutParams(RelativeLayout.LayoutParams.MATCH_PARENT, RelativeLayout.LayoutParams.WRAP_CONTENT).apply {
-            addRule(RelativeLayout.BELOW, headerLayout.id)
+            addRule(RelativeLayout.ALIGN_PARENT_BOTTOM)
             setMargins(30, 10, 30, 20)
         }
         rootLayout.addView(tabContainer, tabParams)
@@ -231,8 +231,9 @@ class MainActivity : AppCompatActivity() {
             isFillViewport = true
         }
         val scrollParams = RelativeLayout.LayoutParams(RelativeLayout.LayoutParams.MATCH_PARENT, RelativeLayout.LayoutParams.MATCH_PARENT).apply {
-            addRule(RelativeLayout.BELOW, tabContainer.id)
-            setMargins(30, 0, 30, 30)
+            addRule(RelativeLayout.BELOW, headerLayout.id)
+            addRule(RelativeLayout.ABOVE, tabContainer.id)
+            setMargins(30, 0, 30, 0)
         }
 
         val contentLayout = LinearLayout(this).apply {
