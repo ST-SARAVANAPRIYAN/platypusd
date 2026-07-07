@@ -9,50 +9,50 @@
 /* Light Theme: Android 16 Pastel Glassmorphism */
 .light-mode {
   --bg-primary: #f0f4f9;
-  --bg-secondary: rgba(255, 255, 255, 0.7);
-  --bg-card: rgba(255, 255, 255, 0.5);
-  --border-color: rgba(255, 255, 255, 0.45);
+  --bg-secondary: #eceff4;
+  --bg-card: #ffffff;
+  --border-color: #e1e3e8;
   --text-main: #1d1b20;
   --text-muted: #49454f;
   
-  --accent: #0b57d0; /* Google / Android 16 Blue */
-  --accent-container: rgba(211, 227, 253, 0.6);
+  --accent: #0f52ba; /* Platypus Blue */
+  --accent-container: #d3e3fd;
   --text-accent: #ffffff;
   --text-accent-container: #041e49;
 
   --success: #146c43;
-  --success-container: rgba(209, 231, 221, 0.7);
+  --success-container: #d1e7dd;
   --danger: #b3261e;
-  --danger-container: rgba(249, 222, 220, 0.7);
+  --danger-container: #f9dedc;
   --warning: #a97900;
   
-  --glass-blur: blur(24px) saturate(180%);
-  --shadow-main: 0 4px 30px rgba(0, 0, 0, 0.03);
-  --shadow-hover: 0 10px 40px rgba(0, 0, 0, 0.06);
+  --glass-blur: none;
+  --shadow-main: 0 1px 3px rgba(0, 0, 0, 0.05);
+  --shadow-hover: 0 4px 12px rgba(0, 0, 0, 0.08);
 }
 
-/* Dark Theme: Android 16 Dark Nebula Glassmorphism */
+/* Dark Theme: Android 16 Dark Nebula */
 .dark-mode {
   --bg-primary: #0b0d11;
-  --bg-secondary: rgba(24, 28, 36, 0.75);
-  --bg-card: rgba(20, 24, 30, 0.55);
-  --border-color: rgba(255, 255, 255, 0.08);
+  --bg-secondary: #13161c;
+  --bg-card: #181b21;
+  --border-color: #2f333a;
   --text-main: #e6e1e5;
   --text-muted: #cac4d0;
   
   --accent: #a8c7fa; /* Pastel Android Blue */
-  --accent-container: rgba(8, 66, 160, 0.45);
+  --accent-container: #0842a0;
   --text-accent: #062e6f;
   --text-accent-container: #d3e3fd;
 
   --success: #6ddb9c;
-  --success-container: rgba(0, 57, 28, 0.4);
+  --success-container: #00391c;
   --danger: #f2b8b5;
-  --danger-container: rgba(96, 20, 16, 0.4);
+  --danger-container: #601410;
   --warning: #ffcc00;
   
-  --glass-blur: blur(24px) saturate(200%);
-  --shadow-main: 0 4px 30px rgba(0, 0, 0, 0.2);
+  --glass-blur: none;
+  --shadow-main: 0 1px 3px rgba(0, 0, 0, 0.15);
   --shadow-hover: 0 12px 48px rgba(0, 0, 0, 0.35);
 }
 
@@ -382,7 +382,7 @@ header {
   font-family: inherit;
   font-weight: 600;
   font-size: 0.95rem;
-  border-radius: 12px;
+  border-radius: 100px; /* Material 3 capsule button */
   cursor: pointer;
   transition: all var(--transition-speed) var(--transition-bezier);
   display: flex;
@@ -397,7 +397,7 @@ header {
 
 .sidebar-btn:hover:not(.active) {
   color: var(--text-main);
-  background-color: rgba(168, 199, 250, 0.12);
+  background-color: rgba(168, 199, 250, 0.08);
 }
 
 .btn-icon {
@@ -407,21 +407,18 @@ header {
   width: 24px;
   height: 24px;
   font-weight: 800;
-  font-size: 0.85rem;
-  background: var(--bg-primary);
+  font-size: 0.95rem;
+  background: transparent;
   color: var(--text-muted);
-  border-radius: 8px;
-  border: 1px solid var(--border-color);
+  border: none;
   flex-shrink: 0;
   margin-left: 15.5px; /* (55px - 24px)/2 = 15.5px to center in collapsed state */
   margin-right: 15px;
-  transition: background-color var(--transition-speed), color var(--transition-speed);
+  transition: color var(--transition-speed);
 }
 
 .sidebar-btn.active .btn-icon {
-  background: var(--accent);
-  color: white;
-  border-color: var(--accent);
+  color: var(--text-accent-container);
 }
 
 .btn-text {
@@ -463,10 +460,10 @@ header {
   width: 32px;
   height: 32px;
   background: var(--accent);
-  color: white;
+  color: var(--text-accent);
   font-weight: 900;
   font-size: 1.2rem;
-  border-radius: 8px;
+  border-radius: 50%; /* Circle Logo */
   flex-shrink: 0;
   margin-left: 11.5px; /* (55px - 32px)/2 = 11.5px to center in collapsed state */
   margin-right: 15px;
