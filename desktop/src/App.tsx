@@ -233,6 +233,9 @@ export default function App() {
     }
   }, [activeTab, isDaemonOnline, status]);
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+  const [palette, setPalette] = useState<string>(() => {
+    return localStorage.getItem('theme-palette') || 'purple';
+  });
 
   const fetchClipboardConfig = async () => {
     try {
@@ -451,7 +454,7 @@ export default function App() {
   // Identify if active device is connected over Bluetooth
   const isBluetoothConnected = status?.paired_devices.some(d => d.is_bluetooth_connected) || false;
   return (
-    <div className={`theme-root ${theme}-mode`}>
+    <div className={`theme-root ${theme}-mode palette-${palette}`}>
       <div className="container">
         
         {/* Sidebar Navigation */}
@@ -1140,7 +1143,7 @@ export default function App() {
                 {/* System Preferences & Status Card */}
                 <div className="card" style={{ marginBottom: '1.5rem' }}>
                   <h2>System Preferences & Status</h2>
-                  <div style={{ display: 'flex', gap: '2rem', alignItems: 'center', flexWrap: 'wrap', marginTop: '1rem' }}>
+                  <div style={{ display: 'flex', gap: '2.5rem', alignItems: 'center', flexWrap: 'wrap', marginTop: '1rem' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                       <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)', fontWeight: 'bold' }}>Application Theme</span>
                       <md-outlined-button 
@@ -1149,6 +1152,38 @@ export default function App() {
                       >
                         {theme === 'light' ? 'Dark Theme' : 'Light Theme'}
                       </md-outlined-button>
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                      <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)', fontWeight: 'bold' }}>Theme Color Palette</span>
+                      <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.25rem' }}>
+                        {[
+                          { id: 'purple', name: 'Amethyst Purple', color: '#6750a4' },
+                          { id: 'blue', name: 'Platypus Blue', color: '#0f52ba' },
+                          { id: 'green', name: 'Forest Green', color: '#386a20' },
+                          { id: 'red', name: 'Crimson Red', color: '#ba1a1a' }
+                        ].map((pal) => (
+                          <button
+                            key={pal.id}
+                            title={pal.name}
+                            onClick={() => {
+                              setPalette(pal.id);
+                              localStorage.setItem('theme-palette', pal.id);
+                            }}
+                            style={{
+                              width: '32px',
+                              height: '32px',
+                              borderRadius: '50%',
+                              backgroundColor: pal.color,
+                              border: palette === pal.id ? '3px solid var(--text-main)' : '1px solid var(--border-color)',
+                              cursor: 'pointer',
+                              boxShadow: palette === pal.id ? '0 0 8px rgba(0,0,0,0.2)' : 'none',
+                              transition: 'all 0.2s',
+                              transform: palette === pal.id ? 'scale(1.1)' : 'scale(1)'
+                            }}
+                          />
+                        ))}
+                      </div>
                     </div>
                     
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>

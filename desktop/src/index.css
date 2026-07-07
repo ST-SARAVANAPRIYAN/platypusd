@@ -17,8 +17,9 @@
   --md-sys-color-on-surface-variant: var(--text-muted);
 }
 
-/* Light Theme: Material 3 Purple / Lavender */
-.light-mode {
+/* Light Theme: Material 3 Purple / Lavender (Default) */
+.light-mode,
+.light-mode.palette-purple {
   --bg-primary: #fbf8fd;
   --bg-secondary: #f3edf7;
   --bg-card: #ffffff;
@@ -42,8 +43,84 @@
   --shadow-hover: 0 4px 12px rgba(0, 0, 0, 0.08);
 }
 
-/* Dark Theme: Material 3 Dark Orchid */
-.dark-mode {
+/* Light Theme: Material 3 Ocean Blue */
+.light-mode.palette-blue {
+  --bg-primary: #f8f9ff;
+  --bg-secondary: #edf0f9;
+  --bg-card: #ffffff;
+  --border-color: #dbe3f8;
+  --text-main: #1b1b1f;
+  --text-muted: #43474e;
+  
+  --accent: #0f52ba; /* Platypus Blue */
+  --accent-container: #d3e3fd;
+  --text-accent: #ffffff;
+  --text-accent-container: #041e49;
+
+  --success: #146c43;
+  --success-container: #d1e7dd;
+  --danger: #b3261e;
+  --danger-container: #f9dedc;
+  --warning: #a97900;
+  
+  --glass-blur: none;
+  --shadow-main: 0 1px 3px rgba(0, 0, 0, 0.05);
+  --shadow-hover: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+/* Light Theme: Material 3 Forest Green */
+.light-mode.palette-green {
+  --bg-primary: #f6fbf2;
+  --bg-secondary: #eef4e8;
+  --bg-card: #ffffff;
+  --border-color: #e0e4db;
+  --text-main: #191c18;
+  --text-muted: #43483f;
+  
+  --accent: #386a20; /* Forest Green */
+  --accent-container: #b8f397;
+  --text-accent: #ffffff;
+  --text-accent-container: #042100;
+
+  --success: #146c43;
+  --success-container: #d1e7dd;
+  --danger: #b3261e;
+  --danger-container: #f9dedc;
+  --warning: #a97900;
+  
+  --glass-blur: none;
+  --shadow-main: 0 1px 3px rgba(0, 0, 0, 0.05);
+  --shadow-hover: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+/* Light Theme: Material 3 Crimson Red */
+.light-mode.palette-red {
+  --bg-primary: #fffbff;
+  --bg-secondary: #fceae9;
+  --bg-card: #ffffff;
+  --border-color: #f5dad7;
+  --text-main: #201a19;
+  --text-muted: #534341;
+  
+  --accent: #ba1a1a; /* Crimson Red */
+  --accent-container: #ffdad6;
+  --text-accent: #ffffff;
+  --text-accent-container: #410002;
+
+  --success: #146c43;
+  --success-container: #d1e7dd;
+  --danger: #b3261e;
+  --danger-container: #f9dedc;
+  --warning: #a97900;
+  
+  --glass-blur: none;
+  --shadow-main: 0 1px 3px rgba(0, 0, 0, 0.05);
+  --shadow-hover: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+/* Dark Theme: Material 3 Dark Orchid (Default) */
+.dark-mode,
+.dark-mode.palette-purple {
   --bg-primary: #0f0e13;
   --bg-secondary: #1d1b20;
   --bg-card: #25232a;
@@ -55,6 +132,81 @@
   --accent-container: #4f378b;
   --text-accent: #381e72;
   --text-accent-container: #eaddff;
+
+  --success: #6ddb9c;
+  --success-container: #00391c;
+  --danger: #f2b8b5;
+  --danger-container: #601410;
+  --warning: #ffcc00;
+  
+  --glass-blur: none;
+  --shadow-main: 0 1px 3px rgba(0, 0, 0, 0.15);
+  --shadow-hover: 0 12px 48px rgba(0, 0, 0, 0.35);
+}
+
+/* Dark Theme: Material 3 Deep Blue */
+.dark-mode.palette-blue {
+  --bg-primary: #0b0d11;
+  --bg-secondary: #13161c;
+  --bg-card: #181b21;
+  --border-color: #2f333a;
+  --text-main: #e6e1e5;
+  --text-muted: #cac4d0;
+  
+  --accent: #a8c7fa; /* Pastel Android Blue */
+  --accent-container: #0842a0;
+  --text-accent: #062e6f;
+  --text-accent-container: #d3e3fd;
+
+  --success: #6ddb9c;
+  --success-container: #00391c;
+  --danger: #f2b8b5;
+  --danger-container: #601410;
+  --warning: #ffcc00;
+  
+  --glass-blur: none;
+  --shadow-main: 0 1px 3px rgba(0, 0, 0, 0.15);
+  --shadow-hover: 0 12px 48px rgba(0, 0, 0, 0.35);
+}
+
+/* Dark Theme: Material 3 Green */
+.dark-mode.palette-green {
+  --bg-primary: #0f100e;
+  --bg-secondary: #1d1f1b;
+  --bg-card: #252822;
+  --border-color: #43483f;
+  --text-main: #e2e3dd;
+  --text-muted: #c2c8bc;
+  
+  --accent: #9cd67d; /* Pastel Green */
+  --accent-container: #205107;
+  --text-accent: #0b3900;
+  --text-accent-container: #b8f397;
+
+  --success: #6ddb9c;
+  --success-container: #00391c;
+  --danger: #f2b8b5;
+  --danger-container: #601410;
+  --warning: #ffcc00;
+  
+  --glass-blur: none;
+  --shadow-main: 0 1px 3px rgba(0, 0, 0, 0.15);
+  --shadow-hover: 0 12px 48px rgba(0, 0, 0, 0.35);
+}
+
+/* Dark Theme: Material 3 Red */
+.dark-mode.palette-red {
+  --bg-primary: #140f0e;
+  --bg-secondary: #261b1a;
+  --bg-card: #2f2120;
+  --border-color: #534341;
+  --text-main: #ede0de;
+  --text-muted: #d8c2bf;
+  
+  --accent: #ffb4ab; /* Pastel Red */
+  --accent-container: #93000a;
+  --text-accent: #690005;
+  --text-accent-container: #ffdad6;
 
   --success: #6ddb9c;
   --success-container: #00391c;
@@ -82,6 +234,12 @@
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+}
+
+/* Fix global padding/margin reset squishing @material/web custom elements */
+md-filled-button, md-outlined-button, md-text-button, md-switch, md-checkbox {
+  padding: initial;
+  margin: initial;
 }
 
 .container {
