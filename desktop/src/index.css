@@ -240,6 +240,7 @@
 md-filled-button, md-outlined-button, md-text-button, md-switch, md-checkbox {
   padding: initial;
   margin: initial;
+  display: inline-flex;
 }
 
 .container {

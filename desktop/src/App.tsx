@@ -1215,8 +1215,8 @@ export default function App() {
                       </span>
                       <md-switch
                         checked={clipAutoSync ? true : undefined}
-                        onClick={(e: any) => {
-                          const checked = e.target.checked;
+                        onClick={() => {
+                          const checked = !clipAutoSync;
                           setClipAutoSync(checked);
                           saveClipboardConfig(clipDirection, checked);
                         }}
