@@ -34,6 +34,7 @@ interface StatusData {
 
 export default function App() {
   const wsRef = useRef<WebSocket | null>(null);
+  const switchRef = useRef<any>(null);
   const [status, setStatus] = useState<StatusData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [activeCall, setActiveCall] = useState<ActiveCall | null>(null);
@@ -238,6 +239,12 @@ export default function App() {
     return localStorage.getItem('theme-palette') || 'purple';
   });
 
+  useEffect(() => {
+    if (switchRef.current) {
+      switchRef.current.checked = clipAutoSync;
+    }
+  }, [clipAutoSync]);
+
   const fetchClipboardConfig = async () => {
     try {
       const res = await fetch('http://localhost:8080/api/v1/clipboard/config');
@@ -372,6 +379,9 @@ export default function App() {
           if (payload.event === 'CallStateChanged') {
             const call: ActiveCall = payload.data;
             setActiveCall(call.state === 'Disconnected' ? null : call);
+          } else if (payload.event === 'ClipboardConfigChanged') {
+            setClipDirection(payload.data.direction);
+            setClipAutoSync(payload.data.auto_sync);
           } else if (payload.event === 'ClipboardSynced') {
             setLastClipboard(payload.data.text);
           } else if (
@@ -1214,8 +1224,9 @@ export default function App() {
                         Enable Real-Time Clipboard Synchronization
                       </span>
                       <md-switch
-                        checked={clipAutoSync ? true : undefined}
-                        onClick={() => {
+                        ref={switchRef}
+                        onClick={(e: any) => {
+                          e.preventDefault();
                           const checked = !clipAutoSync;
                           setClipAutoSync(checked);
                           saveClipboardConfig(clipDirection, checked);

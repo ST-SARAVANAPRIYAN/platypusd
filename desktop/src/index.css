@@ -243,6 +243,10 @@ md-filled-button, md-outlined-button, md-text-button, md-switch, md-checkbox {
   display: inline-flex;
 }
 
+md-filled-button, md-outlined-button, md-text-button {
+  min-width: max-content;
+}
+
 .container {
   display: flex;
   flex-direction: row;
