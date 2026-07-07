@@ -297,6 +297,15 @@ pub async fn set_clipboard_config(
     cfg.direction = payload.direction;
     cfg.auto_sync = payload.auto_sync;
     info!("Updated clipboard configuration: direction={}, auto_sync={}", cfg.direction, cfg.auto_sync);
+    
+    let _ = state.tx.send(crate::api::WsMessage {
+        event: "ClipboardConfigChanged".to_string(),
+        data: serde_json::json!({
+            "direction": cfg.direction.clone(),
+            "auto_sync": cfg.auto_sync,
+        }),
+    });
+
     (StatusCode::OK, Json(serde_json::json!({ "success": true })))
 }
 

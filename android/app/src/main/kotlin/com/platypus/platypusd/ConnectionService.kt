@@ -320,9 +320,12 @@ class ConnectionService : Service() {
         val urlWithParams = if (wsUrl.contains("?")) {
             wsUrl
         } else {
+            val btAdapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter()
+            val friendlyBtName = btAdapter?.name ?: deviceName
             val encodedName = java.net.URLEncoder.encode(deviceName, "UTF-8")
             val encodedType = java.net.URLEncoder.encode(connectionType, "UTF-8")
-            "$wsUrl?device_id=$deviceId&device_name=$encodedName&connection_type=$encodedType"
+            val encodedBtName = java.net.URLEncoder.encode(friendlyBtName, "UTF-8")
+            "$wsUrl?device_id=$deviceId&device_name=$encodedName&connection_type=$encodedType&bt_name=$encodedBtName"
         }
         Log.i(TAG, "Connecting WebSocket to: $urlWithParams")
         val request = Request.Builder().url(urlWithParams).build()
@@ -361,6 +364,20 @@ class ConnectionService : Service() {
                                 scope.launch(Dispatchers.Main) {
                                     syncToAndroidClipboard(sharedText)
                                 }
+                            }
+                        } else if (event == "ClipboardConfigChanged") {
+                            val direction = data.optString("direction")
+                            val autoSync = data.optBoolean("auto_sync")
+                            Log.i(TAG, "Received clipboard config change command: direction=$direction, autoSync=$autoSync")
+                            
+                            val sharedPrefs = getSharedPreferences("platypusd_prefs", Context.MODE_PRIVATE)
+                            sharedPrefs.edit()
+                                .putString("clipboard_direction", direction)
+                                .putBoolean("clipboard_auto_sync", autoSync)
+                                .apply()
+
+                            scope.launch(Dispatchers.Main) {
+                                MainActivity.instance?.refreshClipboardUi()
                             }
                         } else if (event == "CallActionDispatched") {
                             val action = data.optString("action")

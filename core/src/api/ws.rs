@@ -12,6 +12,7 @@ use serde::Deserialize;
 pub struct WsParams {
     pub device_id: Option<String>,
     pub connection_type: Option<String>,
+    pub bt_name: Option<String>,
 }
 
 pub async fn ws_handler(
@@ -21,13 +22,14 @@ pub async fn ws_handler(
     State(state): State<AppState>,
 ) -> impl IntoResponse {
     let peer_ip = addr.ip().to_string();
-    ws.on_upgrade(move |socket| handle_socket(socket, params.device_id, params.connection_type, Some(peer_ip), state))
+    ws.on_upgrade(move |socket| handle_socket(socket, params.device_id, params.connection_type, params.bt_name, Some(peer_ip), state))
 }
 
 async fn handle_socket(
     socket: WebSocket,
     device_id: Option<String>,
     connection_type: Option<String>,
+    bt_name: Option<String>,
     peer_ip: Option<String>,
     state: AppState,
 ) {
@@ -44,6 +46,18 @@ async fn handle_socket(
             dev_id = id.clone();
             info!("Mobile device connected via WS: {} ({:?}) at IP {:?}", dev_id, connection_type, peer_ip);
             
+            // Dynamically update friendly Bluetooth device name in DB if provided
+            if let Some(ref bt) = bt_name {
+                let db = state.db.clone();
+                let id_clone = dev_id.clone();
+                let bt_clone = bt.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = db.update_device_name(&id_clone, &bt_clone).await {
+                        warn!("Failed to dynamically update device name in db: {}", e);
+                    }
+                });
+            }
+
             {
                 let mut active = state.active_connections.lock().await;
                 active.insert(dev_id.clone());

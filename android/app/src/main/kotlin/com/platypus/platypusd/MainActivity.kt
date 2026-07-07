@@ -645,8 +645,8 @@ class MainActivity : AppCompatActivity() {
         clipConfigCard.addView(configTitle)
 
         val autoSyncPrefs = getSharedPreferences("platypusd_prefs", Context.MODE_PRIVATE)
-        val currentAutoSync = autoSyncPrefs.getBoolean("clipboard_auto_sync", true)
-        val currentDirection = autoSyncPrefs.getString("clipboard_direction", "bidirectional") ?: "bidirectional"
+        var currentAutoSync = autoSyncPrefs.getBoolean("clipboard_auto_sync", true)
+        var currentDirection = autoSyncPrefs.getString("clipboard_direction", "bidirectional") ?: "bidirectional"
 
         val autoSyncSwitch = Switch(this).apply {
             text = "Enable Automatic Sync"
@@ -658,79 +658,94 @@ class MainActivity : AppCompatActivity() {
         clipConfigCard.addView(autoSyncSwitch)
 
         val directionLabel = TextView(this).apply {
-            text = "Sync Direction:"
+            text = "Sync Direction Flow:"
             textSize = 13f
             setTextColor(getThemeColor(darkText, lightText))
             setTypeface(null, Typeface.BOLD)
-            setPadding(0, 10, 0, 10)
+            setPadding(0, 10, 0, 15)
         }
         clipConfigCard.addView(directionLabel)
 
-        val spinnerContainer = FrameLayout(this).apply {
-            background = getNeobrutalismDrawable(getThemeColor(darkCard, lightCard), getThemeColor(darkBorder, lightBorder), 5, 36f)
-            setPadding(10, 5, 10, 5)
+        // Custom Segmented Buttons Container
+        val segmentedGroup = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                bottomMargin = 20
+                bottomMargin = 25
+            }
+            weightSum = 3f
+        }
+
+        // Helper to get button style
+        fun getSegmentButton(title: String): Button {
+            return Button(this@MainActivity).apply {
+                text = title
+                textSize = 9f
+                setPadding(5, 10, 5, 10)
+                setTypeface(null, Typeface.BOLD)
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    leftMargin = 5
+                    rightMargin = 5
+                }
             }
         }
 
-        val directionSpinner = Spinner(this).apply {
-            val options = arrayOf("Bidirectional", "Desktop to Mobile", "Mobile to Desktop")
-            val adapter = object : ArrayAdapter<String>(this@MainActivity, android.R.layout.simple_spinner_item, options) {
-                override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
-                    val v = super.getView(position, convertView, parent)
-                    (v as? TextView)?.apply {
-                        setTextColor(getThemeColor(darkText, lightText))
-                        textSize = 14f
-                        setTypeface(null, Typeface.BOLD)
-                    }
-                    return v
-                }
+        val btnBidi = getSegmentButton("Bidirectional")
+        val btnToMobile = getSegmentButton("Desktop to Mobile")
+        val btnToDesktop = getSegmentButton("Mobile to Desktop")
 
-                override fun getDropDownView(position: Int, convertView: View?, parent: ViewGroup): View {
-                    val v = super.getDropDownView(position, convertView, parent)
-                    v.setBackgroundColor(getThemeColor(darkCard, lightCard))
-                    (v as? TextView)?.apply {
-                        setTextColor(getThemeColor(darkText, lightText))
-                        textSize = 14f
-                    }
-                    return v
+        fun refreshSegmentButtons(activeDir: String) {
+            val buttons = mapOf(
+                "bidirectional" to btnBidi,
+                "desktop_to_mobile" to btnToMobile,
+                "mobile_to_desktop" to btnToDesktop
+            )
+            for ((key, btn) in buttons) {
+                val isSelected = key == activeDir
+                btn.setTextColor(if (isSelected) Color.WHITE else getThemeColor(darkText, lightText))
+                btn.background = if (isSelected) {
+                    getNeobrutalismDrawable(accentColor, Color.TRANSPARENT, 0, 24f)
+                } else {
+                    getNeobrutalismDrawable(Color.TRANSPARENT, getThemeColor(darkBorder, lightBorder), 2, 24f)
                 }
-            }
-            this.adapter = adapter
-            
-            val initialPos = when (currentDirection) {
-                "bidirectional" -> 0
-                "desktop_to_mobile" -> 1
-                "mobile_to_desktop" -> 2
-                else -> 0
-            }
-            setSelection(initialPos)
-
-            onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-                override fun onItemSelected(parent: AdapterView<*>?, view: View?, pos: Int, id: Long) {
-                    val dir = when (pos) {
-                        0 -> "bidirectional"
-                        1 -> "desktop_to_mobile"
-                        2 -> "mobile_to_desktop"
-                        else -> "bidirectional"
-                    }
-                    saveClipboardConfig(dir, autoSyncSwitch.isChecked)
-                }
-                override fun onNothingSelected(parent: AdapterView<*>?) {}
             }
         }
-        spinnerContainer.addView(directionSpinner)
-        clipConfigCard.addView(spinnerContainer)
 
-        autoSyncSwitch.setOnCheckedChangeListener { _, isChecked ->
-            val dir = when (directionSpinner.selectedItemPosition) {
-                0 -> "bidirectional"
-                1 -> "desktop_to_mobile"
-                2 -> "mobile_to_desktop"
+        fun updateDirectionUI(autoSyncEnabled: Boolean) {
+            btnBidi.isEnabled = autoSyncEnabled
+            btnToMobile.isEnabled = autoSyncEnabled
+            btnToDesktop.isEnabled = autoSyncEnabled
+            val targetAlpha = if (autoSyncEnabled) 1.0f else 0.4f
+            segmentedGroup.alpha = targetAlpha
+            directionLabel.alpha = targetAlpha
+        }
+
+        refreshSegmentButtons(currentDirection)
+        updateDirectionUI(currentAutoSync)
+
+        val onDirectionClick = View.OnClickListener { v ->
+            val selectedDir = when (v) {
+                btnBidi -> "bidirectional"
+                btnToMobile -> "desktop_to_mobile"
+                btnToDesktop -> "mobile_to_desktop"
                 else -> "bidirectional"
             }
-            saveClipboardConfig(dir, isChecked)
+            currentDirection = selectedDir
+            refreshSegmentButtons(selectedDir)
+            saveClipboardConfig(selectedDir, autoSyncSwitch.isChecked)
+        }
+
+        btnBidi.setOnClickListener(onDirectionClick)
+        btnToMobile.setOnClickListener(onDirectionClick)
+        btnToDesktop.setOnClickListener(onDirectionClick)
+
+        segmentedGroup.addView(btnBidi)
+        segmentedGroup.addView(btnToMobile)
+        segmentedGroup.addView(btnToDesktop)
+        clipConfigCard.addView(segmentedGroup)
+
+        autoSyncSwitch.setOnCheckedChangeListener { _, isChecked ->
+            updateDirectionUI(isChecked)
+            saveClipboardConfig(currentDirection, isChecked)
         }
         settingsContainer.addView(clipConfigCard)
 

@@ -445,7 +445,7 @@ export default function App() {
   const hasConnectedDevices = connectedDevices.length > 0;
   
   // Identify if active device is connected over Bluetooth
-  const isBluetoothConnected = connectedDevices.some(d => d.is_bluetooth_connected);
+  const isBluetoothConnected = status?.paired_devices.some(d => d.is_bluetooth_connected) || false;
   return (
     <div className={`theme-root ${theme}-mode`}>
       <div className="container">
@@ -1170,25 +1170,22 @@ export default function App() {
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', marginTop: '1rem' }}>
                     
                     {/* Master Auto Sync Toggle */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                      <input 
-                        type="checkbox" 
-                        id="auto-sync-checkbox"
-                        checked={clipAutoSync}
-                        onChange={(e) => {
-                          const checked = e.target.checked;
-                          setClipAutoSync(checked);
-                          saveClipboardConfig(clipDirection, checked);
-                        }}
-                        style={{
-                          width: '20px',
-                          height: '20px',
-                          cursor: 'pointer',
-                          accentColor: 'var(--accent)'
-                        }}
-                      />
-                      <label htmlFor="auto-sync-checkbox" style={{ fontSize: '1rem', cursor: 'pointer', userSelect: 'none', fontWeight: 'bold' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: '1rem' }}>
+                      <span style={{ fontSize: '1rem', fontWeight: 'bold' }}>
                         Enable Real-Time Clipboard Synchronization
+                      </span>
+                      <label className="switch">
+                        <input 
+                          type="checkbox" 
+                          id="auto-sync-checkbox"
+                          checked={clipAutoSync}
+                          onChange={(e) => {
+                            const checked = e.target.checked;
+                            setClipAutoSync(checked);
+                            saveClipboardConfig(clipDirection, checked);
+                          }}
+                        />
+                        <span className="slider"></span>
                       </label>
                     </div>
 
@@ -1228,7 +1225,7 @@ export default function App() {
                             }
                           }}
                         >
-                          Send Only
+                          Desktop to Mobile
                         </button>
                         <button 
                           className={`btn btn-sm ${clipDirection === 'mobile_to_desktop' ? 'btn-primary' : 'btn-secondary'}`}
@@ -1240,7 +1237,7 @@ export default function App() {
                             }
                           }}
                         >
-                          Receive Only
+                          Mobile to Desktop
                         </button>
                       </div>
                       

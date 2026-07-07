@@ -136,6 +136,15 @@ impl Database {
         Ok(())
     }
 
+    pub async fn update_device_name(&self, device_id: &str, device_name: &str) -> Result<()> {
+        sqlx::query("UPDATE paired_devices SET device_name = ? WHERE device_id = ?")
+            .bind(device_name)
+            .bind(device_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn unpair_device(&self, device_id: &str) -> Result<()> {
         sqlx::query("DELETE FROM paired_devices WHERE device_id = ?")
             .bind(device_id)
