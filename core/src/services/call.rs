@@ -193,14 +193,24 @@ impl CallService {
 
                 let bluez_source = if let Some(ref mac) = mac_opt {
                     let formatted_mac = mac.replace(":", "_");
-                    sources.iter().find(|s| s.contains("bluez_input") && s.to_lowercase().contains(&formatted_mac.to_lowercase())).cloned()
+                    if let Some(src) = sources.iter().find(|s| s.contains("bluez_input") && s.to_lowercase().contains(&formatted_mac.to_lowercase())).cloned() {
+                        Some(src)
+                    } else if let Some(src) = sources.iter().find(|s| s.contains("bluez_source") && s.to_lowercase().contains(&formatted_mac.to_lowercase())).cloned() {
+                        Some(src)
+                    } else {
+                        sources.iter().find(|s| s.contains("bluez_input") || s.contains("bluez_source")).cloned()
+                    }
                 } else {
-                    sources.iter().find(|s| s.contains("bluez_input")).cloned()
+                    sources.iter().find(|s| s.contains("bluez_input") || s.contains("bluez_source")).cloned()
                 };
 
                 let bluez_sink = if let Some(ref mac) = mac_opt {
                     let formatted_mac = mac.replace(":", "_");
-                    sinks.iter().find(|s| s.contains("bluez_output") && s.to_lowercase().contains(&formatted_mac.to_lowercase())).cloned()
+                    if let Some(s) = sinks.iter().find(|s| s.contains("bluez_output") && s.to_lowercase().contains(&formatted_mac.to_lowercase())).cloned() {
+                        Some(s)
+                    } else {
+                        sinks.iter().find(|s| s.contains("bluez_output")).cloned()
+                    }
                 } else {
                     sinks.iter().find(|s| s.contains("bluez_output")).cloned()
                 };
@@ -313,7 +323,11 @@ async fn find_bluetooth_card(mac: &str) -> Option<String> {
         return Some(card.clone());
     }
     let raw_mac = mac.to_lowercase();
-    cards.into_iter().find(|c| c.to_lowercase().contains(&raw_mac))
+    if let Some(card) = cards.iter().find(|c| c.to_lowercase().contains(&raw_mac)) {
+        return Some(card.clone());
+    }
+    // Fallback: any bluez card
+    cards.into_iter().find(|c| c.to_lowercase().contains("bluez_card"))
 }
 
 async fn set_bluetooth_profile(mac: &str, headset: bool) -> anyhow::Result<Option<String>> {
