@@ -1,5 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import QRCode from 'qrcode';
+import '@material/web/button/filled-button.js';
+import '@material/web/button/outlined-button.js';
+import '@material/web/button/text-button.js';
+import '@material/web/switch/switch.js';
 
 interface PairedDevice {
   device_id: string;
@@ -1139,13 +1143,12 @@ export default function App() {
                   <div style={{ display: 'flex', gap: '2rem', alignItems: 'center', flexWrap: 'wrap', marginTop: '1rem' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                       <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)', fontWeight: 'bold' }}>Application Theme</span>
-                      <button 
-                        className="btn btn-secondary btn-sm" 
+                      <md-outlined-button 
                         onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
                         style={{ alignSelf: 'flex-start' }}
                       >
                         {theme === 'light' ? 'Dark Theme' : 'Light Theme'}
-                      </button>
+                      </md-outlined-button>
                     </div>
                     
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
@@ -1174,19 +1177,14 @@ export default function App() {
                       <span style={{ fontSize: '1rem', fontWeight: 'bold' }}>
                         Enable Real-Time Clipboard Synchronization
                       </span>
-                      <label className="switch">
-                        <input 
-                          type="checkbox" 
-                          id="auto-sync-checkbox"
-                          checked={clipAutoSync}
-                          onChange={(e) => {
-                            const checked = e.target.checked;
-                            setClipAutoSync(checked);
-                            saveClipboardConfig(clipDirection, checked);
-                          }}
-                        />
-                        <span className="slider"></span>
-                      </label>
+                      <md-switch
+                        checked={clipAutoSync ? true : undefined}
+                        onClick={(e: any) => {
+                          const checked = e.target.checked;
+                          setClipAutoSync(checked);
+                          saveClipboardConfig(clipDirection, checked);
+                        }}
+                      ></md-switch>
                     </div>
 
                     {/* Sync Direction Configuration (Disabled if master is off) */}
@@ -1202,43 +1200,34 @@ export default function App() {
                       <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)', fontWeight: 'bold' }}>Sync Direction Flow</span>
                       
                       {/* Segmented Button Selection */}
-                      <div style={{ display: 'flex', gap: '0.5rem', background: 'var(--bg-primary)', padding: '4px', borderRadius: '10px', border: '1px solid var(--border-color)', width: 'fit-content' }}>
-                        <button 
-                          className={`btn btn-sm ${clipDirection === 'bidirectional' ? 'btn-primary' : 'btn-secondary'}`}
-                          style={{ padding: '0.5rem 1rem', borderRadius: '8px' }}
-                          onClick={() => {
-                            if (clipAutoSync) {
-                              setClipDirection('bidirectional');
-                              saveClipboardConfig('bidirectional', clipAutoSync);
-                            }
-                          }}
-                        >
-                          Bidirectional
-                        </button>
-                        <button 
-                          className={`btn btn-sm ${clipDirection === 'desktop_to_mobile' ? 'btn-primary' : 'btn-secondary'}`}
-                          style={{ padding: '0.5rem 1rem', borderRadius: '8px' }}
-                          onClick={() => {
-                            if (clipAutoSync) {
-                              setClipDirection('desktop_to_mobile');
-                              saveClipboardConfig('desktop_to_mobile', clipAutoSync);
-                            }
-                          }}
-                        >
-                          Desktop to Mobile
-                        </button>
-                        <button 
-                          className={`btn btn-sm ${clipDirection === 'mobile_to_desktop' ? 'btn-primary' : 'btn-secondary'}`}
-                          style={{ padding: '0.5rem 1rem', borderRadius: '8px' }}
-                          onClick={() => {
-                            if (clipAutoSync) {
-                              setClipDirection('mobile_to_desktop');
-                              saveClipboardConfig('mobile_to_desktop', clipAutoSync);
-                            }
-                          }}
-                        >
-                          Mobile to Desktop
-                        </button>
+                      <div style={{ display: 'flex', gap: '0.5rem', background: 'var(--bg-secondary)', padding: '4px', borderRadius: '100px', border: '1px solid var(--border-color)', width: 'fit-content' }}>
+                        {clipDirection === 'bidirectional' ? (
+                          <md-filled-button onClick={() => { if (clipAutoSync) { setClipDirection('bidirectional'); saveClipboardConfig('bidirectional', clipAutoSync); } }}>
+                            Bidirectional
+                          </md-filled-button>
+                        ) : (
+                          <md-outlined-button disabled={!clipAutoSync ? true : undefined} onClick={() => { if (clipAutoSync) { setClipDirection('bidirectional'); saveClipboardConfig('bidirectional', clipAutoSync); } }}>
+                            Bidirectional
+                          </md-outlined-button>
+                        )}
+                        {clipDirection === 'desktop_to_mobile' ? (
+                          <md-filled-button onClick={() => { if (clipAutoSync) { setClipDirection('desktop_to_mobile'); saveClipboardConfig('desktop_to_mobile', clipAutoSync); } }}>
+                            Desktop to Mobile
+                          </md-filled-button>
+                        ) : (
+                          <md-outlined-button disabled={!clipAutoSync ? true : undefined} onClick={() => { if (clipAutoSync) { setClipDirection('desktop_to_mobile'); saveClipboardConfig('desktop_to_mobile', clipAutoSync); } }}>
+                            Desktop to Mobile
+                          </md-outlined-button>
+                        )}
+                        {clipDirection === 'mobile_to_desktop' ? (
+                          <md-filled-button onClick={() => { if (clipAutoSync) { setClipDirection('mobile_to_desktop'); saveClipboardConfig('mobile_to_desktop', clipAutoSync); } }}>
+                            Mobile to Desktop
+                          </md-filled-button>
+                        ) : (
+                          <md-outlined-button disabled={!clipAutoSync ? true : undefined} onClick={() => { if (clipAutoSync) { setClipDirection('mobile_to_desktop'); saveClipboardConfig('mobile_to_desktop', clipAutoSync); } }}>
+                            Mobile to Desktop
+                          </md-outlined-button>
+                        )}
                       </div>
                       
                       <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-muted)' }}>
