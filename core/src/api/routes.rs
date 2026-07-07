@@ -399,11 +399,18 @@ pub async fn list_files(
             let size = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
             let abs_path = entry.path().to_string_lossy().into_owned();
             
+            let last_modified = metadata.as_ref()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            
             list.push(serde_json::json!({
                 "name": file_name,
                 "is_dir": is_dir,
                 "size": size,
-                "path": abs_path
+                "path": abs_path,
+                "last_modified": last_modified
             }));
         }
     }
@@ -439,5 +446,51 @@ pub async fn download_file(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         
     Ok(response)
+}
+
+pub async fn upload_file(
+    Query(params): Query<FileListParams>,
+    mut multipart: axum::extract::Multipart,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let dir_path_str = params.path.ok_or_else(|| (StatusCode::BAD_REQUEST, "Missing path".to_string()))?;
+    let dir_path = std::path::Path::new(&dir_path_str);
+    
+    if !dir_path.exists() || !dir_path.is_dir() {
+        return Err((StatusCode::BAD_REQUEST, "Invalid upload directory".to_string()));
+    }
+    
+    while let Ok(Some(field)) = multipart.next_field().await {
+        let file_name = field.file_name().unwrap_or("file.bin").to_string();
+        let data = field.bytes().await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to read field: {}", e)))?;
+            
+        let dest_path = dir_path.join(file_name);
+        tokio::fs::write(&dest_path, data).await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to write file: {}", e)))?;
+        info!("Successfully uploaded file to: {:?}", dest_path);
+    }
+    
+    Ok(Json(serde_json::json!({ "success": true })))
+}
+
+pub async fn delete_file(
+    Query(params): Query<FileListParams>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let path_str = params.path.ok_or_else(|| (StatusCode::BAD_REQUEST, "Missing path".to_string()))?;
+    let path = std::path::Path::new(&path_str);
+    
+    if !path.exists() {
+        return Err((StatusCode::NOT_FOUND, "File not found".to_string()));
+    }
+    
+    if path.is_dir() {
+        std::fs::remove_dir_all(path)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to delete directory: {}", e)))?;
+    } else {
+        std::fs::remove_file(path)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to delete file: {}", e)))?;
+    }
+    
+    Ok(Json(serde_json::json!({ "success": true })))
 }
 

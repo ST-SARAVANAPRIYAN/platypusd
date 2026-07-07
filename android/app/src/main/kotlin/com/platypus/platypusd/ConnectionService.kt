@@ -153,7 +153,6 @@ class ConnectionService : Service() {
 
         startMdnsDiscovery()
         bootstrapConnectionViaBluetooth()
-        startLocalHttpServer()
 
         // Register dynamic bluetooth connection tracking
         val filter = android.content.IntentFilter().apply {
@@ -345,21 +344,29 @@ class ConnectionService : Service() {
                 try {
                     val json = JSONObject(text)
                     val event = json.optString("event")
-                    val data = json.optJSONObject("data") ?: return
 
-                    if (event == "ClipboardSynced") {
-                        val sharedText = data.optString("text")
-                        if (sharedText.isNotEmpty() && sharedText != lastSyncedClipboardText) {
-                            Log.i(TAG, "Received clipboard sync command. Updating Android clipboard.")
-                            scope.launch(Dispatchers.Main) {
-                                syncToAndroidClipboard(sharedText)
+                    if (event == "StartFileServer") {
+                        Log.i(TAG, "Received command to START local HTTP file server.")
+                        startLocalHttpServer()
+                    } else if (event == "StopFileServer") {
+                        Log.i(TAG, "Received command to STOP local HTTP file server.")
+                        stopLocalHttpServer()
+                    } else {
+                        val data = json.optJSONObject("data") ?: return
+                        if (event == "ClipboardSynced") {
+                            val sharedText = data.optString("text")
+                            if (sharedText.isNotEmpty() && sharedText != lastSyncedClipboardText) {
+                                Log.i(TAG, "Received clipboard sync command. Updating Android clipboard.")
+                                scope.launch(Dispatchers.Main) {
+                                    syncToAndroidClipboard(sharedText)
+                                }
                             }
-                        }
-                    } else if (event == "CallActionDispatched") {
-                        val action = data.optString("action")
-                        Log.i(TAG, "Received call action command: $action")
-                        scope.launch(Dispatchers.Main) {
-                            handleCallActionCommand(action)
+                        } else if (event == "CallActionDispatched") {
+                            val action = data.optString("action")
+                            Log.i(TAG, "Received call action command: $action")
+                            scope.launch(Dispatchers.Main) {
+                                handleCallActionCommand(action)
+                            }
                         }
                     }
                 } catch (e: Exception) {
@@ -897,7 +904,10 @@ class ConnectionService : Service() {
     }
 
     private fun startLocalHttpServer() {
-        fileServerJob?.cancel()
+        if (fileServerJob != null && fileServerJob!!.isActive) {
+            Log.i(TAG, "Local file sharing server is already running.")
+            return
+        }
         fileServerJob = scope.launch(Dispatchers.IO) {
             try {
                 val serverSocket = java.net.ServerSocket(9090)
@@ -907,8 +917,27 @@ class ConnectionService : Service() {
                     val socket = serverSocket.accept()
                     scope.launch(Dispatchers.IO) {
                         try {
-                            val reader = socket.getInputStream().bufferedReader()
-                            val firstLine = reader.readLine() ?: return@launch
+                            val inputStream = socket.getInputStream()
+                            val headerBytes = java.io.ByteArrayOutputStream()
+                            while (true) {
+                                val b = inputStream.read()
+                                if (b == -1) break
+                                headerBytes.write(b)
+                                val bytes = headerBytes.toByteArray()
+                                if (bytes.size >= 4 && 
+                                    bytes[bytes.size - 4] == '\r'.toByte() && 
+                                    bytes[bytes.size - 3] == '\n'.toByte() && 
+                                    bytes[bytes.size - 2] == '\r'.toByte() && 
+                                    bytes[bytes.size - 1] == '\n'.toByte()) {
+                                    break
+                                }
+                            }
+                            
+                            val headerStr = String(headerBytes.toByteArray(), Charsets.UTF_8)
+                            val headerLines = headerStr.split("\r\n")
+                            if (headerLines.isEmpty()) return@launch
+                            
+                            val firstLine = headerLines[0]
                             val parts = firstLine.split(" ")
                             if (parts.size >= 2) {
                                 val method = parts[0]
@@ -916,7 +945,23 @@ class ConnectionService : Service() {
                                 val cleanUrl = decodedUrl.substringBefore("?")
                                 val query = if (decodedUrl.contains("?")) decodedUrl.substringAfter("?") else ""
                                 
-                                if (method == "GET") {
+                                // Parse headers map
+                                val headers = mutableMapOf<String, String>()
+                                for (i in 1 until headerLines.size) {
+                                    val line = headerLines[i]
+                                    if (line.contains(":")) {
+                                        val key = line.substringBefore(":").trim().lowercase()
+                                        val value = line.substringAfter(":").trim()
+                                        headers[key] = value
+                                    }
+                                }
+
+                                val out = socket.getOutputStream()
+                                
+                                if (method == "OPTIONS") {
+                                    out.write("HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: POST, GET, OPTIONS, DELETE\r\nAccess-Control-Allow-Headers: Content-Type, Content-Length\r\nContent-Length: 0\r\n\r\n".toByteArray())
+                                    out.flush()
+                                } else if (method == "GET") {
                                     if (cleanUrl.startsWith("/list")) {
                                         var pathStr = android.os.Environment.getExternalStorageDirectory().absolutePath
                                         if (query.startsWith("path=")) {
@@ -932,13 +977,13 @@ class ConnectionService : Service() {
                                                     put("is_dir", file.isDirectory)
                                                     put("size", file.length())
                                                     put("path", file.absolutePath)
+                                                    put("last_modified", file.lastModified() / 1000)
                                                 }
                                                 filesJson.put(obj)
                                             }
                                         }
                                         val response = filesJson.toString()
                                         val responseBytes = response.toByteArray(Charsets.UTF_8)
-                                        val out = socket.getOutputStream()
                                         out.write("HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: ${responseBytes.size}\r\nAccess-Control-Allow-Origin: *\r\n\r\n".toByteArray())
                                         out.write(responseBytes)
                                         out.flush()
@@ -950,7 +995,6 @@ class ConnectionService : Service() {
                                         
                                         val file = java.io.File(pathStr)
                                         if (file.exists() && file.isFile) {
-                                            val out = socket.getOutputStream()
                                             out.write("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: ${file.length()}\r\nAccess-Control-Allow-Origin: *\r\nContent-Disposition: attachment; filename=\"${file.name}\"\r\n\r\n".toByteArray())
                                             file.inputStream().use { input ->
                                                 input.copyTo(out)
@@ -958,18 +1002,62 @@ class ConnectionService : Service() {
                                             out.flush()
                                         } else {
                                             val response = "File not found"
-                                            val out = socket.getOutputStream()
                                             out.write("HTTP/1.1 404 Not Found\r\nContent-Length: ${response.length}\r\nAccess-Control-Allow-Origin: *\r\n\r\n".toByteArray())
                                             out.write(response.toByteArray())
                                             out.flush()
                                         }
                                     } else {
                                         val response = "Not Found"
-                                        val out = socket.getOutputStream()
                                         out.write("HTTP/1.1 404 Not Found\r\nContent-Length: ${response.length}\r\nAccess-Control-Allow-Origin: *\r\n\r\n".toByteArray())
                                         out.write(response.toByteArray())
                                         out.flush()
                                     }
+                                } else if (method == "POST" && cleanUrl.startsWith("/upload")) {
+                                    var pathStr = ""
+                                    if (query.startsWith("path=")) {
+                                        pathStr = query.substringAfter("path=")
+                                    }
+                                    val file = java.io.File(pathStr)
+                                    val contentLength = headers["content-length"]?.toLongOrNull() ?: 0L
+                                    
+                                    file.parentFile?.mkdirs()
+                                    val fileOut = file.outputStream()
+                                    var bytesCopied = 0L
+                                    val buffer = ByteArray(8192)
+                                    
+                                    while (bytesCopied < contentLength) {
+                                        val toRead = minOf(buffer.size.toLong(), contentLength - bytesCopied).toInt()
+                                        val read = inputStream.read(buffer, 0, toRead)
+                                        if (read == -1) break
+                                        fileOut.write(buffer, 0, read)
+                                        bytesCopied += read
+                                    }
+                                    fileOut.flush()
+                                    fileOut.close()
+                                    
+                                    val response = "{\"success\":true}"
+                                    out.write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ${response.length}\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: POST, GET, OPTIONS, DELETE\r\n\r\n".toByteArray())
+                                    out.write(response.toByteArray())
+                                    out.flush()
+                                } else if (method == "DELETE" && cleanUrl.startsWith("/delete")) {
+                                    var pathStr = ""
+                                    if (query.startsWith("path=")) {
+                                        pathStr = query.substringAfter("path=")
+                                    }
+                                    val file = java.io.File(pathStr)
+                                    val deleted = if (file.exists()) {
+                                        if (file.isDirectory) file.deleteRecursively() else file.delete()
+                                    } else false
+                                    
+                                    val response = "{\"success\":$deleted}"
+                                    out.write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ${response.length}\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: POST, GET, OPTIONS, DELETE\r\n\r\n".toByteArray())
+                                    out.write(response.toByteArray())
+                                    out.flush()
+                                } else {
+                                    val response = "Method not supported"
+                                    out.write("HTTP/1.1 405 Method Not Allowed\r\nContent-Length: ${response.length}\r\nAccess-Control-Allow-Origin: *\r\n\r\n".toByteArray())
+                                    out.write(response.toByteArray())
+                                    out.flush()
                                 }
                             }
                         } catch (e: Exception) {
@@ -987,7 +1075,9 @@ class ConnectionService : Service() {
 
     private fun stopLocalHttpServer() {
         try { fileServerSocket?.close() } catch (e: Exception) {}
+        fileServerSocket = null
         fileServerJob?.cancel()
         fileServerJob = null
+        Log.i(TAG, "Local file sharing server stopped and socket released.")
     }
 }

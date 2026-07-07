@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use axum::{
-    routing::{get, post},
+    routing::{get, post, delete},
     Router,
 };
 use tokio::sync::broadcast;
@@ -47,6 +47,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/v1/calls/state", post(routes::update_call_state))
         .route("/api/v1/files/list", get(routes::list_files))
         .route("/api/v1/files/download", get(routes::download_file))
+        .route("/api/v1/files/upload", post(routes::upload_file))
+        .route("/api/v1/files/delete", delete(routes::delete_file))
         .route("/api/v1/clipboard", post(routes::update_clipboard))
         .route("/api/v1/clipboard/config", get(routes::get_clipboard_config).post(routes::set_clipboard_config))
         .route("/api/v1/bluetooth/open-settings", post(routes::open_bluetooth_settings_route))

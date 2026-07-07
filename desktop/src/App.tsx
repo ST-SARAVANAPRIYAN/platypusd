@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import QRCode from 'qrcode';
 
 interface PairedDevice {
@@ -28,6 +28,7 @@ interface StatusData {
 }
 
 export default function App() {
+  const wsRef = useRef<WebSocket | null>(null);
   const [status, setStatus] = useState<StatusData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [activeCall, setActiveCall] = useState<ActiveCall | null>(null);
@@ -46,6 +47,139 @@ export default function App() {
   const [pcFiles, setPcFiles] = useState<any[]>([]);
   const [loadingMobile, setLoadingMobile] = useState<boolean>(false);
   const [loadingPc, setLoadingPc] = useState<boolean>(false);
+
+  // File explorer sorting, searching, and metadata details
+  const [mobileSearch, setMobileSearch] = useState<string>('');
+  const [pcSearch, setPcSearch] = useState<string>('');
+  const [mobileSort, setMobileSort] = useState<'name' | 'size' | 'date'>('name');
+  const [mobileSortOrder, setMobileSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [pcSort, setPcSort] = useState<'name' | 'size' | 'date'>('name');
+  const [pcSortOrder, setPcSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [selectedFileInfo, setSelectedFileInfo] = useState<any | null>(null);
+
+  const showToast = (message: string) => {
+    const toast = document.getElementById('toast');
+    if (toast) {
+      toast.innerText = message;
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 2500);
+    }
+  };
+
+  const uploadFileToMobile = async (file: File) => {
+    const connected = status?.paired_devices.filter(d => d.is_online) || [];
+    if (!connected.length || !connected[0].ip) return;
+    const phoneIp = connected[0].ip;
+    
+    const destPath = mobilePath ? `${mobilePath}/${file.name}` : `/sdcard/Download/${file.name}`;
+    const url = `http://${phoneIp}:9090/upload?path=${encodeURIComponent(destPath)}`;
+    try {
+      showToast(`Uploading ${file.name} to mobile...`);
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'Content-Length': file.size.toString()
+        },
+        body: file
+      });
+      if (res.ok) {
+        fetchMobileFilesList(mobilePath || '/sdcard');
+        showToast("Uploaded successfully!");
+      } else {
+        alert("Upload failed: " + res.statusText);
+      }
+    } catch (e: any) {
+      alert("Upload failed: " + e.message);
+    }
+  };
+
+  const uploadFileToPc = async (file: File) => {
+    const url = `http://localhost:8080/api/v1/files/upload?path=${encodeURIComponent(pcPath || '/home/saravana')}`;
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    try {
+      showToast(`Uploading ${file.name} to PC...`);
+      const res = await fetch(url, {
+        method: 'POST',
+        body: formData
+      });
+      if (res.ok) {
+        fetchPcFilesList(pcPath || '/home/saravana');
+        showToast("Uploaded successfully!");
+      } else {
+        alert("Upload failed: " + res.statusText);
+      }
+    } catch (e: any) {
+      alert("Upload failed: " + e.message);
+    }
+  };
+
+  const deleteMobileFile = async (filePath: string) => {
+    const connected = status?.paired_devices.filter(d => d.is_online) || [];
+    if (!connected.length || !connected[0].ip) return;
+    if (!confirm("Are you sure you want to delete this file/folder from your mobile device?")) return;
+    
+    const phoneIp = connected[0].ip;
+    const url = `http://${phoneIp}:9090/delete?path=${encodeURIComponent(filePath)}`;
+    try {
+      const res = await fetch(url, { method: 'DELETE' });
+      if (res.ok) {
+        fetchMobileFilesList(mobilePath || '/sdcard');
+        showToast("Deleted successfully!");
+        if (selectedFileInfo && selectedFileInfo.path === filePath) {
+          setSelectedFileInfo(null);
+        }
+      } else {
+        alert("Delete failed: " + res.statusText);
+      }
+    } catch (e: any) {
+      alert("Delete failed: " + e.message);
+    }
+  };
+
+  const deletePcFile = async (filePath: string) => {
+    if (!confirm("Are you sure you want to delete this file/folder from your PC?")) return;
+    const url = `http://localhost:8080/api/v1/files/delete?path=${encodeURIComponent(filePath)}`;
+    try {
+      const res = await fetch(url, { method: 'DELETE' });
+      if (res.ok) {
+        fetchPcFilesList(pcPath || '/home/saravana');
+        showToast("Deleted successfully!");
+        if (selectedFileInfo && selectedFileInfo.path === filePath) {
+          setSelectedFileInfo(null);
+        }
+      } else {
+        alert("Delete failed: " + res.statusText);
+      }
+    } catch (e: any) {
+      alert("Delete failed: " + e.message);
+    }
+  };
+
+  const getProcessedFiles = (
+    files: any[],
+    search: string,
+    sortBy: 'name' | 'size' | 'date',
+    sortOrder: 'asc' | 'desc'
+  ) => {
+    let result = files.filter(f => f.name.toLowerCase().includes(search.toLowerCase()));
+    result.sort((a, b) => {
+      if (a.is_dir && !b.is_dir) return -1;
+      if (!a.is_dir && b.is_dir) return 1;
+      let comparison = 0;
+      if (sortBy === 'name') {
+        comparison = a.name.localeCompare(b.name);
+      } else if (sortBy === 'size') {
+        comparison = a.size - b.size;
+      } else if (sortBy === 'date') {
+        comparison = (a.last_modified || 0) - (b.last_modified || 0);
+      }
+      return sortOrder === 'asc' ? comparison : -comparison;
+    });
+    return result;
+  };
 
   const fetchPcFilesList = async (targetPath: string) => {
     setLoadingPc(true);
@@ -90,13 +224,27 @@ export default function App() {
     }
   };
 
+  const sendWebSocketCommand = (command: string, data: any = {}) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ command, data }));
+    }
+  };
+
   useEffect(() => {
     if (activeTab === 'files') {
-      fetchPcFilesList(pcPath || '/home/saravana');
-      const connected = status?.paired_devices.filter(d => d.is_online) || [];
-      if (connected.length && connected[0].ip) {
-        fetchMobileFilesList(mobilePath || '');
-      }
+      sendWebSocketCommand('StartFileServer');
+      const timer = setTimeout(() => {
+        fetchPcFilesList(pcPath || '/home/saravana');
+        const connected = status?.paired_devices.filter(d => d.is_online) || [];
+        if (connected.length && connected[0].ip) {
+          fetchMobileFilesList(mobilePath || '');
+        }
+      }, 200);
+
+      return () => {
+        clearTimeout(timer);
+        sendWebSocketCommand('StopFileServer');
+      };
     }
   }, [activeTab, status]);
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
@@ -222,6 +370,7 @@ export default function App() {
 
       ws.onopen = () => {
         console.log('Connected to platypusd event stream');
+        wsRef.current = ws;
         setIsDaemonOnline(true);
         setError(null);
         fetchStatus();
@@ -257,6 +406,7 @@ export default function App() {
 
       ws.onclose = () => {
         console.log('WebSocket closed. Attempting reconnect in 3s...');
+        wsRef.current = null;
         setIsDaemonOnline(false);
         reconnectTimeout = setTimeout(connectWS, 3000);
       };
@@ -265,6 +415,7 @@ export default function App() {
     connectWS();
 
     return () => {
+      wsRef.current = null;
       if (ws) ws.close();
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
     };
@@ -528,144 +679,342 @@ export default function App() {
             )}
 
             {activeTab === 'files' && (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', marginTop: '1rem' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', marginTop: '1rem' }}>
                 
-                {/* Column 1: Mobile File Explorer */}
-                <div className="card">
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                    <h2 style={{ margin: 0 }}>📱 Mobile Internal Storage</h2>
-                    {connectedDevices.length && connectedDevices[0].ip ? (
-                      <span className="status-badge online" style={{ fontSize: '0.8rem' }}>Connected</span>
-                    ) : (
-                      <span className="status-badge offline" style={{ fontSize: '0.8rem' }}>Disconnected</span>
-                    )}
-                  </div>
-
-                  {connectedDevices.length && connectedDevices[0].ip ? (
-                    <>
-                      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', alignItems: 'center' }}>
-                        <button 
-                          className="btn btn-secondary btn-sm"
-                          onClick={() => {
-                            if (mobilePath.includes('/')) {
-                              const parent = mobilePath.substring(0, mobilePath.lastIndexOf('/'));
-                              fetchMobileFilesList(parent || '/sdcard');
-                            }
-                          }}
-                        >
-                          ◀ Up
-                        </button>
-                        <code style={{ flexGrow: 1, padding: '0.4rem', background: 'var(--bg)', borderRadius: '4px', overflowX: 'auto', whiteSpace: 'nowrap' }}>
-                          {mobilePath || 'Internal Storage Root'}
-                        </code>
-                      </div>
-
-                      {loadingMobile ? (
-                        <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>Loading storage...</div>
-                      ) : (
-                        <div style={{ maxHeight: '400px', overflowY: 'auto', border: '1px solid var(--border)', borderRadius: '6px' }}>
-                          {mobileFiles.length === 0 ? (
-                            <div style={{ padding: '1rem', textAlign: 'center', color: 'var(--text-muted)' }}>No files found.</div>
-                          ) : (
-                            mobileFiles.map((file: any) => (
-                              <div 
-                                key={file.path} 
-                                style={{ 
-                                  display: 'flex', 
-                                  alignItems: 'center', 
-                                  padding: '0.75rem 1rem', 
-                                  borderBottom: '1px solid var(--border)', 
-                                  cursor: 'pointer',
-                                  transition: 'background 0.2s' 
-                                }}
-                                className="file-item-hover"
-                                onClick={() => {
-                                  if (file.is_dir) {
-                                    fetchMobileFilesList(file.path);
-                                  } else {
-                                    window.open(`http://${connectedDevices[0].ip}:9090/download?path=${encodeURIComponent(file.path)}`);
-                                  }
-                                }}
-                              >
-                                <span style={{ marginRight: '0.75rem', fontSize: '1.2rem' }}>{file.is_dir ? '📁' : '📄'}</span>
-                                <div style={{ flexGrow: 1 }}>
-                                  <div style={{ fontWeight: 500, fontSize: '0.9rem' }}>{file.name}</div>
-                                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{file.is_dir ? 'Folder' : `${(file.size / 1024).toFixed(1)} KB`}</div>
-                                </div>
-                              </div>
-                            ))
-                          )}
-                        </div>
-                      )}
-                    </>
-                  ) : (
-                    <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-                      Connect your mobile app to browse and download phone storage files.
-                    </div>
-                  )}
-                </div>
-
-                {/* Column 2: PC File Explorer */}
-                <div className="card">
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                    <h2 style={{ margin: 0 }}>💻 PC Filesystem</h2>
-                    <span className="status-badge online" style={{ fontSize: '0.8rem' }}>Local</span>
-                  </div>
-
-                  <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', alignItems: 'center' }}>
+                {/* Selected File Details Overlay */}
+                {selectedFileInfo && (
+                  <div className="card" style={{ border: '2px solid var(--accent)', background: 'var(--bg-secondary)', position: 'relative' }}>
                     <button 
-                      className="btn btn-secondary btn-sm"
-                      onClick={() => {
-                        if (pcPath.includes('/')) {
-                          const parent = pcPath.substring(0, pcPath.lastIndexOf('/'));
-                          fetchPcFilesList(parent || '/');
-                        }
-                      }}
+                      onClick={() => setSelectedFileInfo(null)}
+                      style={{ position: 'absolute', right: '1rem', top: '1rem', background: 'none', border: 'none', color: 'var(--text-main)', fontSize: '1.2rem', cursor: 'pointer' }}
                     >
-                      ◀ Up
+                      ✕
                     </button>
-                    <code style={{ flexGrow: 1, padding: '0.4rem', background: 'var(--bg)', borderRadius: '4px', overflowX: 'auto', whiteSpace: 'nowrap' }}>
-                      {pcPath || 'PC Root'}
-                    </code>
+                    <h3 style={{ margin: '0 0 0.75rem 0', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      ℹ️ Detailed File Properties
+                    </h3>
+                    <div style={{ display: 'grid', gridTemplateColumns: '150px 1fr', gap: '0.5rem 1rem', fontSize: '0.9rem' }}>
+                      <strong style={{ color: 'var(--text-muted)' }}>Name:</strong>
+                      <span>{selectedFileInfo.name}</span>
+                      <strong style={{ color: 'var(--text-muted)' }}>Location:</strong>
+                      <code style={{ wordBreak: 'break-all' }}>{selectedFileInfo.path}</code>
+                      <strong style={{ color: 'var(--text-muted)' }}>Type:</strong>
+                      <span>{selectedFileInfo.is_dir ? 'Directory / Folder' : 'Standard File'}</span>
+                      <strong style={{ color: 'var(--text-muted)' }}>Size:</strong>
+                      <span>{selectedFileInfo.is_dir ? '--' : `${(selectedFileInfo.size / 1024).toFixed(2)} KB (${selectedFileInfo.size} bytes)`}</span>
+                      <strong style={{ color: 'var(--text-muted)' }}>Last Modified:</strong>
+                      <span>{selectedFileInfo.last_modified ? new Date(selectedFileInfo.last_modified * 1000).toLocaleString() : 'Unknown'}</span>
+                    </div>
                   </div>
+                )}
 
-                  {loadingPc ? (
-                    <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>Loading filesystem...</div>
-                  ) : (
-                    <div style={{ maxHeight: '400px', overflowY: 'auto', border: '1px solid var(--border)', borderRadius: '6px' }}>
-                      {pcFiles.length === 0 ? (
-                        <div style={{ padding: '1rem', textAlign: 'center', color: 'var(--text-muted)' }}>No files found.</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+                  
+                  {/* Column 1: Mobile File Explorer (browsed from PC) */}
+                  <div className="card" style={{ display: 'flex', flexDirection: 'column', minHeight: '520px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                      <h2 style={{ margin: 0 }}>📱 Browse Mobile Storage</h2>
+                      {status?.paired_devices.some(d => d.is_online) ? (
+                        <span className="status-badge online" style={{ fontSize: '0.8rem' }}>Server Active</span>
                       ) : (
-                        pcFiles.map((file: any) => (
-                          <div 
-                            key={file.path} 
-                            style={{ 
-                              display: 'flex', 
-                              alignItems: 'center', 
-                              padding: '0.75rem 1rem', 
-                              borderBottom: '1px solid var(--border)', 
-                              cursor: 'pointer',
-                              transition: 'background 0.2s' 
-                            }}
-                            className="file-item-hover"
+                        <span className="status-badge offline" style={{ fontSize: '0.8rem' }}>Offline</span>
+                      )}
+                    </div>
+
+                    {status?.paired_devices.some(d => d.is_online) ? (
+                      <>
+                        {/* Search & Sort Controls */}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1rem' }}>
+                          <input 
+                            type="text" 
+                            placeholder="🔍 Search mobile files..." 
+                            value={mobileSearch}
+                            onChange={(e) => setMobileSearch(e.target.value)}
+                            style={{ width: '100%', padding: '0.6rem 1rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-main)' }}
+                          />
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                              <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Sort by:</span>
+                              <select 
+                                value={mobileSort} 
+                                onChange={(e) => setMobileSort(e.target.value as any)}
+                                style={{ padding: '0.3rem 0.5rem', borderRadius: '4px', fontSize: '0.8rem' }}
+                              >
+                                <option value="name">Name</option>
+                                <option value="size">Size</option>
+                                <option value="date">Date Modified</option>
+                              </select>
+                              <button 
+                                className="btn btn-secondary btn-sm"
+                                style={{ padding: '0.2rem 0.6rem !important', fontSize: '0.75rem !important' }}
+                                onClick={() => setMobileSortOrder(p => p === 'asc' ? 'desc' : 'asc')}
+                              >
+                                {mobileSortOrder === 'asc' ? '▲ Asc' : '▼ Desc'}
+                              </button>
+                            </div>
+
+                            {/* Drag / File picker Upload to mobile */}
+                            <label className="btn btn-primary btn-sm" style={{ cursor: 'pointer', margin: 0 }}>
+                              📤 Upload File
+                              <input 
+                                type="file" 
+                                style={{ display: 'none' }}
+                                onChange={(e) => {
+                                  const file = e.target.files?.[0];
+                                  if (file) uploadFileToMobile(file);
+                                }}
+                              />
+                            </label>
+                          </div>
+                        </div>
+
+                        {/* Navigation Row */}
+                        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem', alignItems: 'center' }}>
+                          <button 
+                            className="btn btn-secondary btn-sm"
                             onClick={() => {
-                              if (file.is_dir) {
-                                fetchPcFilesList(file.path);
-                              } else {
-                                window.open(`http://localhost:8080/api/v1/files/download?path=${encodeURIComponent(file.path)}`);
+                              if (mobilePath.includes('/')) {
+                                const parent = mobilePath.substring(0, mobilePath.lastIndexOf('/'));
+                                fetchMobileFilesList(parent || '/sdcard');
                               }
                             }}
                           >
-                            <span style={{ marginRight: '0.75rem', fontSize: '1.2rem' }}>{file.is_dir ? '📁' : '📄'}</span>
-                            <div style={{ flexGrow: 1 }}>
-                              <div style={{ fontWeight: 500, fontSize: '0.9rem' }}>{file.name}</div>
-                              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{file.is_dir ? 'Folder' : `${(file.size / 1024).toFixed(1)} KB`}</div>
-                            </div>
+                            ◀ Up
+                          </button>
+                          <code style={{ flexGrow: 1, padding: '0.4rem 0.75rem', background: 'var(--bg-primary)', borderRadius: '6px', fontSize: '0.85rem', overflowX: 'auto', whiteSpace: 'nowrap', border: '1px solid var(--border-color)' }}>
+                            {mobilePath || '/sdcard'}
+                          </code>
+                        </div>
+
+                        {/* File List Pane */}
+                        {loadingMobile ? (
+                          <div style={{ flexGrow: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>Loading storage...</div>
+                        ) : (
+                          <div style={{ flexGrow: 1, maxHeight: '380px', overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: '8px', background: 'var(--bg-primary)' }}>
+                            {getProcessedFiles(mobileFiles, mobileSearch, mobileSort, mobileSortOrder).length === 0 ? (
+                              <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>No matching files found.</div>
+                            ) : (
+                              getProcessedFiles(mobileFiles, mobileSearch, mobileSort, mobileSortOrder).map((file: any) => (
+                                <div 
+                                  key={file.path} 
+                                  style={{ 
+                                    display: 'flex', 
+                                    alignItems: 'center', 
+                                    padding: '0.6rem 0.85rem', 
+                                    borderBottom: '1px solid var(--border-color)',
+                                    transition: 'background 0.2s'
+                                  }}
+                                  className="file-item-hover"
+                                >
+                                  <span 
+                                    style={{ marginRight: '0.75rem', fontSize: '1.25rem', cursor: 'pointer' }}
+                                    onClick={() => {
+                                      if (file.is_dir) {
+                                        fetchMobileFilesList(file.path);
+                                      }
+                                    }}
+                                  >
+                                    {file.is_dir ? '📁' : '📄'}
+                                  </span>
+                                  <div 
+                                    style={{ flexGrow: 1, minWidth: 0, cursor: file.is_dir ? 'pointer' : 'default' }}
+                                    onClick={() => {
+                                      if (file.is_dir) fetchMobileFilesList(file.path);
+                                    }}
+                                  >
+                                    <div style={{ fontWeight: 500, fontSize: '0.85rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.name}</div>
+                                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                      {file.is_dir ? 'Folder' : `${(file.size / 1024).toFixed(1)} KB`}
+                                    </div>
+                                  </div>
+                                  <div style={{ display: 'flex', gap: '0.35rem' }}>
+                                    {!file.is_dir && (
+                                      <button 
+                                        className="btn btn-secondary btn-sm" 
+                                        style={{ padding: '0.2rem 0.5rem !important' }}
+                                        onClick={() => window.open(`http://${status?.paired_devices.filter(d => d.is_online)[0].ip}:9090/download?path=${encodeURIComponent(file.path)}`)}
+                                        title="Download to PC"
+                                      >
+                                        ⬇️
+                                      </button>
+                                    )}
+                                    <button 
+                                      className="btn btn-secondary btn-sm" 
+                                      style={{ padding: '0.2rem 0.5rem !important' }}
+                                      onClick={() => setSelectedFileInfo(file)}
+                                      title="Show Details"
+                                    >
+                                      ℹ️
+                                    </button>
+                                    <button 
+                                      className="btn btn-danger btn-sm" 
+                                      style={{ padding: '0.2rem 0.5rem !important', background: 'var(--danger-container)', color: 'var(--danger)' }}
+                                      onClick={() => deleteMobileFile(file.path)}
+                                      title="Delete"
+                                    >
+                                      🗑️
+                                    </button>
+                                  </div>
+                                </div>
+                              ))
+                            )}
                           </div>
-                        ))
-                      )}
+                        )}
+                      </>
+                    ) : (
+                      <div style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '2rem', textAlign: 'center', color: 'var(--text-muted)', gap: '1rem' }}>
+                        <span>⚠️ Mobile device is offline.</span>
+                        <span style={{ fontSize: '0.9rem' }}>Please connect your phone to launch the lazy-loaded file server.</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Column 2: PC Filesystem (browsed from Phone / local) */}
+                  <div className="card" style={{ display: 'flex', flexDirection: 'column', minHeight: '520px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                      <h2 style={{ margin: 0 }}>💻 Browse PC Filesystem</h2>
+                      <span className="status-badge online" style={{ fontSize: '0.8rem' }}>Local FS</span>
                     </div>
-                  )}
+
+                    {/* Search & Sort Controls */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1rem' }}>
+                      <input 
+                        type="text" 
+                        placeholder="🔍 Search PC files..." 
+                        value={pcSearch}
+                        onChange={(e) => setPcSearch(e.target.value)}
+                        style={{ width: '100%', padding: '0.6rem 1rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-main)' }}
+                      />
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Sort by:</span>
+                          <select 
+                            value={pcSort} 
+                            onChange={(e) => setPcSort(e.target.value as any)}
+                            style={{ padding: '0.3rem 0.5rem', borderRadius: '4px', fontSize: '0.8rem' }}
+                          >
+                            <option value="name">Name</option>
+                            <option value="size">Size</option>
+                            <option value="date">Date Modified</option>
+                          </select>
+                          <button 
+                            className="btn btn-secondary btn-sm"
+                            style={{ padding: '0.2rem 0.6rem !important', fontSize: '0.75rem !important' }}
+                            onClick={() => setPcSortOrder(p => p === 'asc' ? 'desc' : 'asc')}
+                          >
+                            {pcSortOrder === 'asc' ? '▲ Asc' : '▼ Desc'}
+                          </button>
+                        </div>
+
+                        {/* File picker Upload to PC */}
+                        <label className="btn btn-primary btn-sm" style={{ cursor: 'pointer', margin: 0 }}>
+                          📤 Upload File
+                          <input 
+                            type="file" 
+                            style={{ display: 'none' }}
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) uploadFileToPc(file);
+                            }}
+                          />
+                        </label>
+                      </div>
+                    </div>
+
+                    {/* Navigation Row */}
+                    <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem', alignItems: 'center' }}>
+                      <button 
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => {
+                          if (pcPath.includes('/')) {
+                            const parent = pcPath.substring(0, pcPath.lastIndexOf('/'));
+                            fetchPcFilesList(parent || '/');
+                          }
+                        }}
+                      >
+                        ◀ Up
+                      </button>
+                      <code style={{ flexGrow: 1, padding: '0.4rem 0.75rem', background: 'var(--bg-primary)', borderRadius: '6px', fontSize: '0.85rem', overflowX: 'auto', whiteSpace: 'nowrap', border: '1px solid var(--border-color)' }}>
+                        {pcPath || '/home/saravana'}
+                      </code>
+                    </div>
+
+                    {/* File List Pane */}
+                    {loadingPc ? (
+                      <div style={{ flexGrow: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>Loading filesystem...</div>
+                    ) : (
+                      <div style={{ flexGrow: 1, maxHeight: '380px', overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: '8px', background: 'var(--bg-primary)' }}>
+                        {getProcessedFiles(pcFiles, pcSearch, pcSort, pcSortOrder).length === 0 ? (
+                          <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>No matching files found.</div>
+                        ) : (
+                          getProcessedFiles(pcFiles, pcSearch, pcSort, pcSortOrder).map((file: any) => (
+                            <div 
+                              key={file.path} 
+                              style={{ 
+                                display: 'flex', 
+                                alignItems: 'center', 
+                                padding: '0.6rem 0.85rem', 
+                                borderBottom: '1px solid var(--border-color)',
+                                transition: 'background 0.2s'
+                              }}
+                              className="file-item-hover"
+                            >
+                              <span 
+                                style={{ marginRight: '0.75rem', fontSize: '1.25rem', cursor: 'pointer' }}
+                                onClick={() => {
+                                  if (file.is_dir) {
+                                    fetchPcFilesList(file.path);
+                                  }
+                                }}
+                              >
+                                {file.is_dir ? '📁' : '📄'}
+                              </span>
+                              <div 
+                                style={{ flexGrow: 1, minWidth: 0, cursor: file.is_dir ? 'pointer' : 'default' }}
+                                onClick={() => {
+                                  if (file.is_dir) fetchPcFilesList(file.path);
+                                }}
+                              >
+                                <div style={{ fontWeight: 500, fontSize: '0.85rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.name}</div>
+                                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                  {file.is_dir ? 'Folder' : `${(file.size / 1024).toFixed(1)} KB`}
+                                </div>
+                              </div>
+                              <div style={{ display: 'flex', gap: '0.35rem' }}>
+                                {!file.is_dir && (
+                                  <button 
+                                    className="btn btn-secondary btn-sm" 
+                                    style={{ padding: '0.2rem 0.5rem !important' }}
+                                    onClick={() => window.open(`http://localhost:8080/api/v1/files/download?path=${encodeURIComponent(file.path)}`)}
+                                    title="Download to PC"
+                                  >
+                                    ⬇️
+                                  </button>
+                                )}
+                                <button 
+                                  className="btn btn-secondary btn-sm" 
+                                  style={{ padding: '0.2rem 0.5rem !important' }}
+                                  onClick={() => setSelectedFileInfo(file)}
+                                  title="Show Details"
+                                >
+                                  ℹ️
+                                </button>
+                                <button 
+                                  className="btn btn-danger btn-sm" 
+                                  style={{ padding: '0.2rem 0.5rem !important', background: 'var(--danger-container)', color: 'var(--danger)' }}
+                                  onClick={() => deletePcFile(file.path)}
+                                  title="Delete"
+                                >
+                                  🗑️
+                                </button>
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    )}
+                  </div>
+
                 </div>
 
               </div>

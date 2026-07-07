@@ -137,6 +137,11 @@ async fn handle_socket(
                                     });
                                 }
                             }
+                        } else if cmd == "StartFileServer" || cmd == "StopFileServer" {
+                            let _ = state_clone.tx.send(WsMessage {
+                                event: cmd.to_string(),
+                                data: serde_json::json!({}),
+                            });
                         }
                     }
                 }

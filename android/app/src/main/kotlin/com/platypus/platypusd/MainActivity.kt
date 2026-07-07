@@ -22,6 +22,11 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
+import android.net.Uri
+import android.provider.OpenableColumns
+import okhttp3.MultipartBody
+import okhttp3.RequestBody
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import org.json.JSONObject
 
 class MainActivity : AppCompatActivity() {
@@ -361,17 +366,17 @@ class MainActivity : AppCompatActivity() {
         } else {
             val filesCard = createCardLayout()
             
+            // Files Header & Navigation
             val filesHeader = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(10, 10, 10, 20)
+                setPadding(10, 10, 10, 15)
             }
             
             val upBtn = Button(this).apply {
                 text = "◀ UP"
-                textSize = 12f
+                textSize = 10f
                 setTypeface(null, Typeface.BOLD)
-                setPadding(20, 10, 20, 10)
                 setTextColor(Color.WHITE)
                 background = getNeobrutalismDrawable(accentColor, getThemeColor(darkBorder, lightBorder), 5)
                 setOnClickListener {
@@ -397,14 +402,115 @@ class MainActivity : AppCompatActivity() {
             filesHeader.addView(upBtn)
             filesHeader.addView(pathText)
             filesCard.addView(filesHeader)
+
+            // Search input field
+            val searchInput = EditText(this).apply {
+                hint = "🔍 Search PC files..."
+                setText(pcSearchQuery)
+                setTextColor(getThemeColor(darkText, lightText))
+                setHintTextColor(getThemeColor(darkTextMuted, lightTextMuted))
+                background = getNeobrutalismDrawable(getThemeColor(darkCard, lightCard), getThemeColor(darkBorder, lightBorder), 8)
+                setPadding(30, 20, 30, 20)
+                textSize = 13f
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                    setMargins(10, 5, 10, 15)
+                }
+                addTextChangedListener(object : android.text.TextWatcher {
+                    override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                    override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+                    override fun afterTextChanged(s: android.text.Editable?) {
+                        pcSearchQuery = s?.toString() ?: ""
+                        runOnUiThread { initLayout() }
+                    }
+                })
+            }
+            filesCard.addView(searchInput)
+
+            // Sort Controls & Upload Button Bar
+            val controlsBar = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(10, 0, 10, 20)
+            }
+
+            val sortTitle = TextView(this).apply {
+                text = "Sort:"
+                setTextColor(getThemeColor(darkTextMuted, lightTextMuted))
+                textSize = 12f
+                setPadding(0, 0, 10, 0)
+            }
+            controlsBar.addView(sortTitle)
+
+            // Sort Toggle Button
+            val sortToggleBtn = Button(this).apply {
+                text = when (pcSortBy) {
+                    "size" -> "Size ${if (pcSortAscending) "▲" else "▼"}"
+                    "date" -> "Date ${if (pcSortAscending) "▲" else "▼"}"
+                    else -> "Name ${if (pcSortAscending) "▲" else "▼"}"
+                }
+                textSize = 10f
+                setTextColor(getThemeColor(darkText, lightText))
+                background = getNeobrutalismDrawable(getThemeColor(darkCard, lightCard), getThemeColor(darkBorder, lightBorder), 5)
+                setPadding(20, 10, 20, 10)
+                setOnClickListener {
+                    if (pcSortBy == "name") {
+                        if (pcSortAscending) {
+                            pcSortAscending = false
+                        } else {
+                            pcSortBy = "size"
+                            pcSortAscending = true
+                        }
+                    } else if (pcSortBy == "size") {
+                        if (pcSortAscending) {
+                            pcSortAscending = false
+                        } else {
+                            pcSortBy = "date"
+                            pcSortAscending = true
+                        }
+                    } else {
+                        if (pcSortAscending) {
+                            pcSortAscending = false
+                        } else {
+                            pcSortBy = "name"
+                            pcSortAscending = true
+                        }
+                    }
+                    runOnUiThread { initLayout() }
+                }
+            }
+            controlsBar.addView(sortToggleBtn)
+
+            // Spacer
+            val spacer = View(this).apply {
+                layoutParams = LinearLayout.LayoutParams(0, 0, 1f)
+            }
+            controlsBar.addView(spacer)
+
+            // Upload Button
+            val uploadBtn = Button(this).apply {
+                text = "📤 UPLOAD FILE"
+                textSize = 10f
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(Color.WHITE)
+                background = getNeobrutalismDrawable(accentColor, getThemeColor(darkBorder, lightBorder), 5)
+                setOnClickListener {
+                    val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+                        type = "*/*"
+                    }
+                    startActivityForResult(Intent.createChooser(intent, "Select File to Upload"), PICK_FILE_REQUEST_CODE)
+                }
+            }
+            controlsBar.addView(uploadBtn)
+            filesCard.addView(controlsBar)
             
             val filesListLayout = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
             }
             
-            if (pcFilesList.length() == 0) {
+            val processedFiles = getProcessedPcFiles()
+            if (processedFiles.length() == 0) {
                 val emptyText = TextView(this).apply {
-                    text = "Tap to load PC files or connect to PC."
+                    text = if (pcFilesList.length() == 0) "Tap to load PC files or connect to PC." else "No matching files found."
                     setTextColor(getThemeColor(darkTextMuted, lightTextMuted))
                     textSize = 13f
                     gravity = Gravity.CENTER
@@ -415,8 +521,8 @@ class MainActivity : AppCompatActivity() {
                 }
                 filesListLayout.addView(emptyText)
             } else {
-                for (i in 0 until pcFilesList.length()) {
-                    val item = pcFilesList.getJSONObject(i)
+                for (i in 0 until processedFiles.length()) {
+                    val item = processedFiles.getJSONObject(i)
                     val name = item.getString("name")
                     val isDir = item.getBoolean("is_dir")
                     val path = item.getString("path")
@@ -431,8 +537,31 @@ class MainActivity : AppCompatActivity() {
                             if (isDir) {
                                 fetchPcFiles(path)
                             } else {
-                                downloadPcFile(path, name)
+                                val options = arrayOf("Download to Mobile", "Show Details", "Delete from PC")
+                                androidx.appcompat.app.AlertDialog.Builder(this@MainActivity)
+                                    .setTitle(name)
+                                    .setItems(options) { _, which ->
+                                        when (options[which]) {
+                                            "Download to Mobile" -> downloadPcFile(path, name)
+                                            "Show Details" -> showFileDetailsDialog(name, path, size, isDir, item.optLong("last_modified", 0))
+                                            "Delete from PC" -> deletePcFile(path)
+                                        }
+                                    }
+                                    .show()
                             }
+                        }
+                        setOnLongClickListener {
+                            val options = arrayOf("Show Details", "Delete from PC")
+                            androidx.appcompat.app.AlertDialog.Builder(this@MainActivity)
+                                .setTitle(name)
+                                .setItems(options) { _, which ->
+                                    when (options[which]) {
+                                        "Show Details" -> showFileDetailsDialog(name, path, size, isDir, item.optLong("last_modified", 0))
+                                        "Delete from PC" -> deletePcFile(path)
+                                    }
+                                }
+                                .show()
+                            true
                         }
                     }
                     
@@ -1174,6 +1303,175 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         })
+    }
+    private val PICK_FILE_REQUEST_CODE = 201
+    private var pcSearchQuery = ""
+    private var pcSortBy = "name" // name, size, date
+    private var pcSortAscending = true
+
+    private fun getProcessedPcFiles(): org.json.JSONArray {
+        val filtered = mutableListOf<org.json.JSONObject>()
+        for (i in 0 until pcFilesList.length()) {
+            val item = pcFilesList.getJSONObject(i)
+            val name = item.getString("name")
+            if (pcSearchQuery.isEmpty() || name.lowercase().contains(pcSearchQuery.lowercase())) {
+                filtered.add(item)
+            }
+        }
+        
+        filtered.sortWith(Comparator { a, b ->
+            val aDir = a.getBoolean("is_dir")
+            val bDir = b.getBoolean("is_dir")
+            if (aDir && !bDir) return@Comparator -1
+            if (!aDir && bDir) return@Comparator 1
+            
+            val comparison = when (pcSortBy) {
+                "size" -> {
+                    val aSize = a.optLong("size", 0)
+                    val bSize = b.optLong("size", 0)
+                    aSize.compareTo(bSize)
+                }
+                "date" -> {
+                    val aDate = a.optLong("last_modified", 0)
+                    val bDate = b.optLong("last_modified", 0)
+                    aDate.compareTo(bDate)
+                }
+                else -> {
+                    val aName = a.optString("name", "")
+                    val bName = b.optString("name", "")
+                    aName.lowercase().compareTo(bName.lowercase())
+                }
+            }
+            if (pcSortAscending) comparison else -comparison
+        })
+        
+        val result = org.json.JSONArray()
+        filtered.forEach { result.put(it) }
+        return result
+    }
+
+    private fun deletePcFile(path: String) {
+        val sharedPrefs = getSharedPreferences("platypusd_prefs", Context.MODE_PRIVATE)
+        val ip = sharedPrefs.getString("paired_host_ip", null) ?: return
+        val port = sharedPrefs.getInt("paired_host_port", 8080)
+        
+        val url = "http://$ip:$port/api/v1/files/delete?path=${java.net.URLEncoder.encode(path, "UTF-8")}"
+        val request = okhttp3.Request.Builder().url(url).delete().build()
+        val client = okhttp3.OkHttpClient()
+        
+        client.newCall(request).enqueue(object : okhttp3.Callback {
+            override fun onFailure(call: okhttp3.Call, e: java.io.IOException) {
+                runOnUiThread {
+                    Toast.makeText(this@MainActivity, "Delete failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+
+            override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
+                runOnUiThread {
+                    Toast.makeText(this@MainActivity, "Deleted successfully from PC", Toast.LENGTH_SHORT).show()
+                    fetchPcFiles(currentPcPath)
+                }
+            }
+        })
+    }
+
+    private fun showFileDetailsDialog(name: String, path: String, size: Long, isDir: Boolean, lastModified: Long) {
+        val dateStr = if (lastModified > 0) {
+            val sdf = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
+            sdf.format(java.util.Date(lastModified * 1000))
+        } else {
+            "Unknown"
+        }
+        val sizeStr = if (isDir) "Directory" else "${size / 1024} KB ($size bytes)"
+        
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("Detailed Properties")
+            .setMessage("Name: $name\n\nLocation: $path\n\nSize: $sizeStr\n\nLast Modified: $dateStr")
+            .setPositiveButton("OK", null)
+            .show()
+    }
+
+    private fun getFileName(uri: Uri): String? {
+        var result: String? = null
+        if (uri.scheme == "content") {
+            val cursor = contentResolver.query(uri, null, null, null, null)
+            cursor?.use {
+                if (it.moveToFirst()) {
+                    val index = it.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (index != -1) {
+                        result = it.getString(index)
+                    }
+                }
+            }
+        }
+        if (result == null) {
+            result = uri.path
+            val cut = result?.lastIndexOf('/') ?: -1
+            if (cut != -1) {
+                result = result?.substring(cut + 1)
+            }
+        }
+        return result
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == PICK_FILE_REQUEST_CODE && resultCode == RESULT_OK && data != null) {
+            val uri = data.data ?: return
+            
+            try {
+                val fileName = getFileName(uri) ?: "upload.bin"
+                val inputStream = contentResolver.openInputStream(uri)
+                if (inputStream == null) {
+                    Toast.makeText(this, "Failed to read file", Toast.LENGTH_SHORT).show()
+                    return
+                }
+                val bytes = inputStream.readBytes()
+                inputStream.close()
+                
+                val sharedPrefs = getSharedPreferences("platypusd_prefs", Context.MODE_PRIVATE)
+                val ip = sharedPrefs.getString("paired_host_ip", null)
+                val port = sharedPrefs.getInt("paired_host_port", 8080)
+                
+                if (ip == null) {
+                    Toast.makeText(this, "Not connected to PC", Toast.LENGTH_SHORT).show()
+                    return
+                }
+                
+                val requestBody = MultipartBody.Builder()
+                    .setType(MultipartBody.FORM)
+                    .addFormDataPart(
+                        "file",
+                        fileName,
+                        RequestBody.create("application/octet-stream".toMediaTypeOrNull(), bytes)
+                    )
+                    .build()
+                
+                val targetPath = if (currentPcPath.isEmpty()) "/home/saravana" else currentPcPath
+                val url = "http://$ip:$port/api/v1/files/upload?path=${java.net.URLEncoder.encode(targetPath, "UTF-8")}"
+                val request = okhttp3.Request.Builder().url(url).post(requestBody).build()
+                val client = okhttp3.OkHttpClient()
+                
+                Toast.makeText(this, "Uploading to PC...", Toast.LENGTH_SHORT).show()
+                
+                client.newCall(request).enqueue(object : okhttp3.Callback {
+                    override fun onFailure(call: okhttp3.Call, e: java.io.IOException) {
+                        runOnUiThread {
+                            Toast.makeText(this@MainActivity, "Upload failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+
+                    override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
+                        runOnUiThread {
+                            Toast.makeText(this@MainActivity, "Uploaded successfully to PC!", Toast.LENGTH_SHORT).show()
+                            fetchPcFiles(currentPcPath)
+                        }
+                    }
+                })
+            } catch (e: Exception) {
+                Toast.makeText(this, "Upload failed: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     companion object {
