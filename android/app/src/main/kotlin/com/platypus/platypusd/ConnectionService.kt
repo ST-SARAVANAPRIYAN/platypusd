@@ -965,8 +965,12 @@ class ConnectionService : Service() {
                                     if (cleanUrl.startsWith("/list")) {
                                         var pathStr = android.os.Environment.getExternalStorageDirectory().absolutePath
                                         if (query.startsWith("path=")) {
-                                            pathStr = query.substringAfter("path=")
+                                            val p = query.substringAfter("path=")
+                                            if (p.isNotEmpty()) {
+                                                pathStr = p
+                                            }
                                         }
+                                        Log.i(TAG, "File Server: Listing directory path='$pathStr'")
                                         
                                         val dir = java.io.File(pathStr)
                                         val filesJson = org.json.JSONArray()

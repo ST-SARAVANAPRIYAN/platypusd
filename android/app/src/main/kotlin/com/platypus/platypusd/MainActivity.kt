@@ -374,7 +374,7 @@ class MainActivity : AppCompatActivity() {
             }
             
             val upBtn = Button(this).apply {
-                text = "◀ UP"
+                text = "UP"
                 textSize = 10f
                 setTypeface(null, Typeface.BOLD)
                 setTextColor(Color.WHITE)
@@ -405,7 +405,7 @@ class MainActivity : AppCompatActivity() {
 
             // Search input field
             val searchInput = EditText(this).apply {
-                hint = "🔍 Search PC files..."
+                hint = "Search files..."
                 setText(pcSearchQuery)
                 setTextColor(getThemeColor(darkText, lightText))
                 setHintTextColor(getThemeColor(darkTextMuted, lightTextMuted))
@@ -488,7 +488,7 @@ class MainActivity : AppCompatActivity() {
 
             // Upload Button
             val uploadBtn = Button(this).apply {
-                text = "📤 UPLOAD FILE"
+                text = "UPLOAD FILE"
                 textSize = 10f
                 setTypeface(null, Typeface.BOLD)
                 setTextColor(Color.WHITE)
@@ -566,9 +566,15 @@ class MainActivity : AppCompatActivity() {
                     }
                     
                     val iconView = TextView(this).apply {
-                        text = if (isDir) "📁" else "📄"
-                        textSize = 18f
-                        setPadding(0, 0, 20, 0)
+                        text = if (isDir) "DIR" else "FILE"
+                        textSize = 9f
+                        setTypeface(null, Typeface.BOLD)
+                        setTextColor(if (isDir) Color.WHITE else getThemeColor(darkText, lightText))
+                        background = getNeobrutalismDrawable(if (isDir) accentColor else getThemeColor(darkCard, lightCard), getThemeColor(darkBorder, lightBorder), 4)
+                        setPadding(12, 6, 12, 6)
+                        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                            setMargins(0, 0, 20, 0)
+                        }
                     }
                     
                     val infoLayout = LinearLayout(this).apply {
