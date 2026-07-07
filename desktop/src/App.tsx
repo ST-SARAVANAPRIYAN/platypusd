@@ -448,40 +448,36 @@ export default function App() {
   const isBluetoothConnected = connectedDevices.some(d => d.is_bluetooth_connected);
   return (
     <div className={`theme-root ${theme}-mode`}>
-      <div className={`container ${activeTab === 'files' ? 'full-width-explorer' : ''}`} style={{ alignItems: 'flex-start' }}>
+      <div className="container">
         
         {/* Sidebar Navigation */}
-        <aside className="card" style={{ width: '240px', flexShrink: 0, padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.5rem', height: 'fit-content' }}>
+        <aside className="app-sidebar">
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.50rem', padding: '0.25rem 0.25rem' }}>
             <h1 style={{ fontSize: '1.25rem', margin: 0, letterSpacing: '-0.02em', fontWeight: 'bold' }}>platypusd</h1>
           </div>
           
-          <nav style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+          <nav className="sidebar-nav">
             <button 
-              className={`tab-btn ${activeTab === 'dashboard' ? 'active' : ''}`} 
+              className={`sidebar-btn ${activeTab === 'dashboard' ? 'active' : ''}`} 
               onClick={() => setActiveTab('dashboard')}
-              style={{ width: '100%', justifyContent: 'flex-start', padding: '0.8rem 1.25rem', borderRadius: '14px' }}
             >
               Dashboard
             </button>
             <button 
-              className={`tab-btn ${activeTab === 'clipboard' ? 'active' : ''}`} 
+              className={`sidebar-btn ${activeTab === 'clipboard' ? 'active' : ''}`} 
               onClick={() => setActiveTab('clipboard')}
-              style={{ width: '100%', justifyContent: 'flex-start', padding: '0.8rem 1.25rem', borderRadius: '14px' }}
             >
               Clipboard Sync
             </button>
             <button 
-              className={`tab-btn ${activeTab === 'files' ? 'active' : ''}`} 
+              className={`sidebar-btn ${activeTab === 'files' ? 'active' : ''}`} 
               onClick={() => setActiveTab('files')}
-              style={{ width: '100%', justifyContent: 'flex-start', padding: '0.8rem 1.25rem', borderRadius: '14px' }}
             >
               File Explorer
             </button>
             <button 
-              className={`tab-btn ${activeTab === 'settings' ? 'active' : ''}`} 
+              className={`sidebar-btn ${activeTab === 'settings' ? 'active' : ''}`} 
               onClick={() => setActiveTab('settings')}
-              style={{ width: '100%', justifyContent: 'flex-start', padding: '0.8rem 1.25rem', borderRadius: '14px' }}
             >
               Settings
             </button>
@@ -489,7 +485,7 @@ export default function App() {
         </aside>
 
         {/* Main Content Area */}
-        <main style={{ flexGrow: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+        <main className="app-main">
           
           {error && !isDaemonOnline && (
             <div className="card" style={{ borderColor: 'var(--danger)', backgroundColor: 'var(--danger-container)' }}>
