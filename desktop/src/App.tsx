@@ -4,6 +4,7 @@ import '@material/web/button/filled-button.js';
 import '@material/web/button/outlined-button.js';
 import '@material/web/button/text-button.js';
 import '@material/web/switch/switch.js';
+import { LayoutDashboard, Clipboard, Folder, Settings } from 'lucide-react';
 
 interface PairedDevice {
   device_id: string;
@@ -469,28 +470,28 @@ export default function App() {
               className={`sidebar-btn ${activeTab === 'dashboard' ? 'active' : ''}`} 
               onClick={() => setActiveTab('dashboard')}
             >
-              <span className="btn-icon">D</span>
+              <span className="btn-icon"><LayoutDashboard size={18} /></span>
               <span className="btn-text">Dashboard</span>
             </button>
             <button 
               className={`sidebar-btn ${activeTab === 'clipboard' ? 'active' : ''}`} 
               onClick={() => setActiveTab('clipboard')}
             >
-              <span className="btn-icon">C</span>
+              <span className="btn-icon"><Clipboard size={18} /></span>
               <span className="btn-text">Clipboard Sync</span>
             </button>
             <button 
               className={`sidebar-btn ${activeTab === 'files' ? 'active' : ''}`} 
               onClick={() => setActiveTab('files')}
             >
-              <span className="btn-icon">F</span>
+              <span className="btn-icon"><Folder size={18} /></span>
               <span className="btn-text">File Explorer</span>
             </button>
             <button 
               className={`sidebar-btn ${activeTab === 'settings' ? 'active' : ''}`} 
               onClick={() => setActiveTab('settings')}
             >
-              <span className="btn-icon">S</span>
+              <span className="btn-icon"><Settings size={18} /></span>
               <span className="btn-text">Settings</span>
             </button>
           </nav>
