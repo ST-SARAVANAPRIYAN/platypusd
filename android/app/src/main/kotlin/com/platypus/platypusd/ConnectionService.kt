@@ -230,6 +230,8 @@ class ConnectionService : Service() {
                 var socket: java.net.DatagramSocket? = null
                 var audioTrack: android.media.AudioTrack? = null
                 val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                var packetCount = 0
+                var firstPacketReceived = false
 
                 val focusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
                     when (focusChange) {
@@ -309,29 +311,49 @@ class ConnectionService : Service() {
                     )
                 }
 
-                while (isUdpAudioActive) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && audioTrack != null) {
+                    val minBufInFrames = minBuf / 4
+                    val targetBufferSizeInFrames = Math.max(minBufInFrames, 240 * 12) // 12 packets = 60ms of jitter buffer
+                    val actualBufferInFrames = audioTrack.setBufferSizeInFrames(targetBufferSizeInFrames)
+                    Log.i(TAG, "Configured active AudioTrack buffer size to $actualBufferInFrames frames (requested $targetBufferSizeInFrames)")
+                }
+
+                  while (isUdpAudioActive) {
                     try {
                         packet.length = buffer.size
                         socket.receive(packet)
+
+                        if (!firstPacketReceived) {
+                            firstPacketReceived = true
+                            Log.i(TAG, "First UDP audio packet received, length: ${packet.length}")
+                        }
+
+                        packetCount++
+                        if (packetCount % 500 == 0) {
+                            Log.d(TAG, "Received 500 UDP audio packets. Active state: $isUdpAudioActive, Track state: ${audioTrack?.playState}")
+                        }
                         
-                        if (audioTrack.state == android.media.AudioTrack.STATE_INITIALIZED && audioTrack.playState != android.media.AudioTrack.PLAYSTATE_PLAYING) {
+                        if (audioTrack != null && audioTrack.state == android.media.AudioTrack.STATE_INITIALIZED && audioTrack.playState != android.media.AudioTrack.PLAYSTATE_PLAYING) {
+                            try {
+                                audioTrack.play()
+                                Log.i(TAG, "AudioTrack started playing successfully.")
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Failed to start AudioTrack: ${e.message}")
+                            }
                             @Suppress("DEPRECATION")
-                            val res = audioManager.requestAudioFocus(
+                            audioManager.requestAudioFocus(
                                 focusChangeListener,
                                 AudioManager.STREAM_MUSIC,
                                 AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK
                             )
-                            if (res == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
-                                audioTrack.play()
-                            }
                         }
 
-                        if (audioTrack.playState == android.media.AudioTrack.PLAYSTATE_PLAYING) {
+                        if (audioTrack != null && audioTrack.playState == android.media.AudioTrack.PLAYSTATE_PLAYING) {
                             audioTrack.write(packet.data, packet.offset, packet.length)
                         }
                     } catch (e: java.io.InterruptedIOException) {
                         // socket timeout, pause to release hardware resources/save battery
-                        if (audioTrack.playState == android.media.AudioTrack.PLAYSTATE_PLAYING) {
+                        if (audioTrack != null && audioTrack.playState == android.media.AudioTrack.PLAYSTATE_PLAYING) {
                             audioTrack.pause()
                             audioTrack.flush()
                             @Suppress("DEPRECATION")
