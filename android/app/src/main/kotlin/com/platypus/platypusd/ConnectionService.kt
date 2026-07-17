@@ -61,6 +61,7 @@ class ConnectionService : Service() {
     private var fileServerJob: kotlinx.coroutines.Job? = null
     private var fileServerSocket: java.net.ServerSocket? = null
 
+    private val udpLock = Any()
     private var udpAudioThread: Thread? = null
     var isUdpAudioActive = false
     private var udpSocket: java.net.DatagramSocket? = null
@@ -218,38 +219,43 @@ class ConnectionService : Service() {
     }
 
     private fun startUdpAudioReceiver() {
-        if (isUdpAudioActive) return
-        isUdpAudioActive = true
-        
-        udpAudioThread = Thread {
-            Log.i(TAG, "UDP Audio Receiver thread started, listening on port 9095")
-            val buffer = ByteArray(960)
-            val packet = DatagramPacket(buffer, buffer.size)
-            var socket: java.net.DatagramSocket? = null
-            var audioTrack: android.media.AudioTrack? = null
-            val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-            
-            val focusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
-                when (focusChange) {
-                    AudioManager.AUDIOFOCUS_LOSS,
-                    AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
-                    AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
-                        try {
-                            audioTrack?.pause()
-                        } catch (e: Exception) {}
-                    }
-                    AudioManager.AUDIOFOCUS_GAIN -> {
-                        try {
-                            audioTrack?.play()
-                        } catch (e: Exception) {}
+        synchronized(udpLock) {
+            if (isUdpAudioActive) return
+            isUdpAudioActive = true
+
+            udpAudioThread = Thread {
+                Log.i(TAG, "UDP Audio Receiver thread started, listening on port 9095")
+                val buffer = ByteArray(960)
+                val packet = DatagramPacket(buffer, buffer.size)
+                var socket: java.net.DatagramSocket? = null
+                var audioTrack: android.media.AudioTrack? = null
+                val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
+                val focusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
+                    when (focusChange) {
+                        AudioManager.AUDIOFOCUS_LOSS,
+                        AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
+                        AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+                            try {
+                                audioTrack?.pause()
+                            } catch (e: Exception) {}
+                        }
+                        AudioManager.AUDIOFOCUS_GAIN -> {
+                            try {
+                                audioTrack?.play()
+                            } catch (e: Exception) {}
+                        }
                     }
                 }
-            }
 
-            try {
-                socket = java.net.DatagramSocket(9095)
-                socket.soTimeout = 1000 // 1 second timeout
-                udpSocket = socket
+                try {
+                    socket = java.net.DatagramSocket(null)
+                    socket.reuseAddress = true
+                    socket.bind(java.net.InetSocketAddress(9095))
+                    socket.soTimeout = 1000 // 1 second timeout
+                    synchronized(udpLock) {
+                        udpSocket = socket
+                    }
 
                 val minBuf = android.media.AudioTrack.getMinBufferSize(
                     48000,
@@ -349,14 +355,18 @@ class ConnectionService : Service() {
             name = "UdpAudioReceiverThread"
             start()
         }
+        }
     }
 
     private fun stopUdpAudioReceiver() {
-        isUdpAudioActive = false
-        try {
-            udpSocket?.close()
-        } catch (e: Exception) {}
-        udpAudioThread = null
+        synchronized(udpLock) {
+            isUdpAudioActive = false
+            try {
+                udpSocket?.close()
+            } catch (e: Exception) {}
+            udpSocket = null
+            udpAudioThread = null
+        }
     }
 
     private fun updateDaemonUrl(host: String, port: Int) {

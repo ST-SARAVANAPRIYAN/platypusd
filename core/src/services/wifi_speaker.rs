@@ -22,6 +22,7 @@ pub struct WifiSpeakerService {
     loopback_module_id: Arc<Mutex<Option<String>>>,
     original_default_sink: Arc<Mutex<Option<String>>>,
     pub config: Arc<Mutex<AudioConfig>>,
+    routing_mutex: Mutex<()>,
 }
 
 impl WifiSpeakerService {
@@ -37,6 +38,7 @@ impl WifiSpeakerService {
                 playback_mode: "destination_only".to_string(),
                 wifi_speaker_active: false,
             })),
+            routing_mutex: Mutex::new(()),
         }
     }
 
@@ -45,10 +47,12 @@ impl WifiSpeakerService {
     }
 
     pub async fn start(&self, target_ip: String, playback_mode: Option<String>) -> anyhow::Result<()> {
-        if self.is_active.swap(true, Ordering::Relaxed) {
+        let _guard = self.routing_mutex.lock().await;
+        if self.is_active.load(Ordering::Relaxed) {
             info!("Wi-Fi Speaker Service is already active.");
             return Ok(());
         }
+        self.is_active.store(true, Ordering::Relaxed);
 
         info!("Starting Wi-Fi Speaker Service to target IP: {} with playback mode: {:?}", target_ip, playback_mode);
 
@@ -237,10 +241,12 @@ impl WifiSpeakerService {
     }
 
     pub async fn stop(&self) -> anyhow::Result<()> {
-        if !self.is_active.swap(false, Ordering::Relaxed) {
+        let _guard = self.routing_mutex.lock().await;
+        if !self.is_active.load(Ordering::Relaxed) {
             info!("Wi-Fi Speaker Service is already inactive.");
             return Ok(());
         }
+        self.is_active.store(false, Ordering::Relaxed);
 
         info!("Stopping Wi-Fi Speaker Service...");
 
