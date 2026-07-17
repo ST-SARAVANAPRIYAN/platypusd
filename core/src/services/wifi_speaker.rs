@@ -150,7 +150,7 @@ impl WifiSpeakerService {
         if mode == "both" {
             info!("Dual playback mode: looping back wifi_speaker.monitor to hardware sink {}...", base_sink);
             match Command::new("pactl")
-                .args(&["load-module", "module-loopback", "source=wifi_speaker.monitor", &format!("sink={}", base_sink), "latency_msec=10"])
+                .args(&["load-module", "module-loopback", "source=wifi_speaker.monitor", &format!("sink={}", base_sink), "latency_msec=100"])
                 .output()
                 .await
             {
