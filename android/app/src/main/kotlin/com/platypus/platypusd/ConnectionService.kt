@@ -28,6 +28,13 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import android.media.AudioFormat
+import android.media.AudioManager
+import android.media.AudioTrack
+import android.media.AudioAttributes
+import java.net.DatagramSocket
+import java.net.DatagramPacket
+import java.net.SocketTimeoutException
 import okhttp3.Response
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
@@ -53,6 +60,10 @@ class ConnectionService : Service() {
     
     private var fileServerJob: kotlinx.coroutines.Job? = null
     private var fileServerSocket: java.net.ServerSocket? = null
+
+    private var udpAudioThread: Thread? = null
+    var isUdpAudioActive = false
+    private var udpSocket: java.net.DatagramSocket? = null
 
     private val connectedBluetoothDevices = HashSet<String>()
     
@@ -163,12 +174,17 @@ class ConnectionService : Service() {
         registerReceiver(bluetoothReceiver, filter)
 
         Log.i(TAG, "ConnectionService initialized.")
+        startUdpAudioReceiver()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val customIp = intent?.getStringExtra("DAEMON_IP") ?: intent?.getStringExtra("CONNECT_IP")
         if (customIp != null) {
             updateDaemonUrl(customIp, 8080)
+        }
+        val updateCallsSync = intent?.getBooleanExtra("UPDATE_CALLS_SYNC", false) ?: false
+        if (updateCallsSync) {
+            checkBluetoothConnectionToHost()
         }
         val checkBt = intent?.getBooleanExtra("CHECK_BT", false) ?: false
         if (checkBt) {
@@ -188,6 +204,7 @@ class ConnectionService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        stopUdpAudioReceiver()
         try {
             unregisterReceiver(bluetoothReceiver)
         } catch (e: Exception) {
@@ -201,7 +218,135 @@ class ConnectionService : Service() {
         Log.i(TAG, "ConnectionService destroyed.")
     }
 
+    private fun startUdpAudioReceiver() {
+        if (isUdpAudioActive) return
+        isUdpAudioActive = true
+        
+        udpAudioThread = Thread {
+            Log.i(TAG, "UDP Audio Receiver thread started, listening on port 9095")
+            val buffer = ByteArray(960)
+            val packet = DatagramPacket(buffer, buffer.size)
+            var socket: java.net.DatagramSocket? = null
+            var audioTrack: android.media.AudioTrack? = null
+            val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            
+            val focusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
+                when (focusChange) {
+                    AudioManager.AUDIOFOCUS_LOSS,
+                    AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
+                    AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+                        try {
+                            audioTrack?.pause()
+                        } catch (e: Exception) {}
+                    }
+                    AudioManager.AUDIOFOCUS_GAIN -> {
+                        try {
+                            audioTrack?.play()
+                        } catch (e: Exception) {}
+                    }
+                }
+            }
+
+            try {
+                socket = java.net.DatagramSocket(9095)
+                socket.soTimeout = 1000 // 1 second timeout
+                udpSocket = socket
+
+                val minBuf = android.media.AudioTrack.getMinBufferSize(
+                    48000,
+                    android.media.AudioFormat.CHANNEL_OUT_STEREO,
+                    android.media.AudioFormat.ENCODING_PCM_16BIT
+                )
+                
+                audioTrack = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    android.media.AudioTrack(
+                        android.media.AudioAttributes.Builder()
+                            .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                            .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC)
+                            .build(),
+                        android.media.AudioFormat.Builder()
+                            .setEncoding(android.media.AudioFormat.ENCODING_PCM_16BIT)
+                            .setSampleRate(48000)
+                            .setChannelMask(android.media.AudioFormat.CHANNEL_OUT_STEREO)
+                            .build(),
+                        Math.max(minBuf, 9600),
+                        android.media.AudioTrack.MODE_STREAM,
+                        AudioManager.AUDIO_SESSION_ID_GENERATE
+                    )
+                } else {
+                    @Suppress("DEPRECATION")
+                    android.media.AudioTrack(
+                        AudioManager.STREAM_MUSIC,
+                        48000,
+                        android.media.AudioFormat.CHANNEL_OUT_STEREO,
+                        android.media.AudioFormat.ENCODING_PCM_16BIT,
+                        Math.max(minBuf, 9600),
+                        android.media.AudioTrack.MODE_STREAM
+                    )
+                }
+
+                while (isUdpAudioActive) {
+                    try {
+                        socket.receive(packet)
+                        
+                        if (audioTrack.state == android.media.AudioTrack.STATE_INITIALIZED && audioTrack.playState != android.media.AudioTrack.PLAYSTATE_PLAYING) {
+                            @Suppress("DEPRECATION")
+                            val res = audioManager.requestAudioFocus(
+                                focusChangeListener,
+                                AudioManager.STREAM_MUSIC,
+                                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK
+                            )
+                            if (res == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+                                audioTrack.play()
+                            }
+                        }
+
+                        if (audioTrack.playState == android.media.AudioTrack.PLAYSTATE_PLAYING) {
+                            audioTrack.write(packet.data, packet.offset, packet.length)
+                        }
+                    } catch (e: java.io.InterruptedIOException) {
+                        // socket timeout, pause to release hardware resources/save battery
+                        if (audioTrack.playState == android.media.AudioTrack.PLAYSTATE_PLAYING) {
+                            audioTrack.pause()
+                            audioTrack.flush()
+                            @Suppress("DEPRECATION")
+                            audioManager.abandonAudioFocus(focusChangeListener)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in UDP Audio Receiver: ${e.message}")
+            } finally {
+                try {
+                    audioTrack?.stop()
+                    audioTrack?.release()
+                } catch (e: Exception) {}
+                try {
+                    socket?.close()
+                } catch (e: Exception) {}
+                Log.i(TAG, "UDP Audio Receiver thread stopped.")
+            }
+        }.apply {
+            name = "UdpAudioReceiverThread"
+            start()
+        }
+    }
+
+    private fun stopUdpAudioReceiver() {
+        isUdpAudioActive = false
+        try {
+            udpSocket?.close()
+        } catch (e: Exception) {}
+        udpAudioThread = null
+    }
+
     private fun updateDaemonUrl(host: String, port: Int) {
+        val sharedPrefs = getSharedPreferences("platypusd_prefs", Context.MODE_PRIVATE)
+        sharedPrefs.edit()
+            .putString("paired_host_ip", host)
+            .putInt("paired_host_port", port)
+            .apply()
+
         if (daemonHost == host && daemonPort == port) return
         daemonHost = host
         daemonPort = port
@@ -418,7 +563,8 @@ class ConnectionService : Service() {
     }
 
     private suspend fun delayReconnect() {
-        if (failedConnectionsCount >= 2) {
+        val sharedPrefs = getSharedPreferences("platypusd_prefs", Context.MODE_PRIVATE)
+        if (failedConnectionsCount >= 2 && sharedPrefs.getBoolean("calls_sync_enabled", true)) {
             Log.i(TAG, "Reconnection failed multiple times. Attempting Bluetooth RFCOMM IP bootstrap...")
             bootstrapConnectionViaBluetooth()
             failedConnectionsCount = 0
@@ -431,6 +577,11 @@ class ConnectionService : Service() {
     }
 
     fun bootstrapConnectionViaBluetooth() {
+        val sharedPrefs = getSharedPreferences("platypusd_prefs", Context.MODE_PRIVATE)
+        if (!sharedPrefs.getBoolean("calls_sync_enabled", true)) {
+            Log.i(TAG, "RFCOMM: Bluetooth bootstrapping skipped (calls_sync_enabled is false)")
+            return
+        }
         scope.launch(Dispatchers.IO) {
             var success = false
             try {
@@ -753,6 +904,14 @@ class ConnectionService : Service() {
     private var isBluetoothConnectedCached: Boolean? = null
 
     private fun checkBluetoothConnectionToHost() {
+        val sharedPrefs = getSharedPreferences("platypusd_prefs", Context.MODE_PRIVATE)
+        if (!sharedPrefs.getBoolean("calls_sync_enabled", true)) {
+            if (isBluetoothConnectedCached != false) {
+                isBluetoothConnectedCached = false
+                sendBluetoothStatus(false, "", "")
+            }
+            return
+        }
         if (!isWsConnected || activeWebSocket == null) return
 
         val btAdapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter()
@@ -1015,15 +1174,18 @@ class ConnectionService : Service() {
                                         out.write("HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: ${responseBytes.size}\r\nAccess-Control-Allow-Origin: *\r\n\r\n".toByteArray())
                                         out.write(responseBytes)
                                         out.flush()
-                                    } else if (cleanUrl.startsWith("/download")) {
+                                    } else if (cleanUrl.startsWith("/download") || cleanUrl.startsWith("/view")) {
                                         var pathStr = ""
                                         if (query.startsWith("path=")) {
                                             pathStr = query.substringAfter("path=")
                                         }
-                                        
+                                        val isInline = cleanUrl.startsWith("/view")
                                         val file = java.io.File(pathStr)
                                         if (file.exists() && file.isFile) {
-                                            out.write("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: ${file.length()}\r\nAccess-Control-Allow-Origin: *\r\nContent-Disposition: attachment; filename=\"${file.name}\"\r\n\r\n".toByteArray())
+                                            val ext = file.name.substringAfterLast('.', "").lowercase()
+                                            val mime = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "application/octet-stream"
+                                            val disposition = if (isInline) "inline" else "attachment; filename=\"${file.name}\""
+                                            out.write("HTTP/1.1 200 OK\r\nContent-Type: $mime\r\nContent-Length: ${file.length()}\r\nAccess-Control-Allow-Origin: *\r\nContent-Disposition: $disposition\r\n\r\n".toByteArray())
                                             file.inputStream().use { input ->
                                                 input.copyTo(out)
                                             }

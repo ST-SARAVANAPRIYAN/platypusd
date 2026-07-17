@@ -8,6 +8,7 @@ use serde::{Serialize, Deserialize};
 use crate::db::{Database, LocalIdentity};
 use crate::services::call::CallService;
 use crate::services::clipboard::ClipboardService;
+use crate::services::wifi_speaker::WifiSpeakerService;
 use tower_http::cors::{Any, CorsLayer};
 
 pub mod routes;
@@ -18,6 +19,7 @@ pub struct AppState {
     pub db: Database,
     pub call_service: Arc<CallService>,
     pub clipboard_service: Arc<ClipboardService>,
+    pub wifi_speaker_service: Arc<WifiSpeakerService>,
     pub identity: LocalIdentity,
     pub tx: broadcast::Sender<WsMessage>,
     pub active_connections: Arc<tokio::sync::Mutex<std::collections::HashSet<String>>>,
@@ -53,6 +55,9 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/v1/clipboard/config", get(routes::get_clipboard_config).post(routes::set_clipboard_config))
         .route("/api/v1/bluetooth/open-settings", post(routes::open_bluetooth_settings_route))
         .route("/api/v1/bluetooth/disconnect", post(routes::disconnect_bluetooth_device_route))
+        .route("/api/v1/speaker/start", post(routes::speaker_start))
+        .route("/api/v1/speaker/stop", post(routes::speaker_stop))
+        .route("/api/v1/calls/gateway/toggle", post(routes::toggle_call_gateway))
         .route("/api/v1/events", get(ws::ws_handler))
 
         .layer(cors)

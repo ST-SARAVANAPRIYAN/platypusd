@@ -39,6 +39,9 @@ async fn main() -> anyhow::Result<()> {
     let clipboard_service = Arc::new(services::clipboard::ClipboardService::new(tx.clone()));
     clipboard_service.clone().start_monitoring();
 
+    // Initialize Wi-Fi Speaker Service
+    let wifi_speaker_service = Arc::new(services::wifi_speaker::WifiSpeakerService::new());
+
     // Initialize & Start Local Network Discovery (mDNS)
     let port: u16 = 8080;
 
@@ -60,6 +63,7 @@ async fn main() -> anyhow::Result<()> {
         db,
         call_service,
         clipboard_service,
+        wifi_speaker_service,
         identity,
         tx,
         active_connections: Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new())),

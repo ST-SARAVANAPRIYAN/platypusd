@@ -6,7 +6,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use crate::api::{AppState, WsMessage};
 use crate::services::call::{ActiveCall, CallState};
-use tracing::{info, error};
+use tracing::{info, warn, error};
 
 #[derive(Serialize)]
 pub struct StatusResponse {
@@ -17,6 +17,8 @@ pub struct StatusResponse {
     pub public_key: String,
     pub paired_devices: Vec<PairedDeviceDto>,
     pub active_call: Option<ActiveCall>,
+    pub wifi_speaker_active: bool,
+    pub call_gateway_enabled: bool,
 }
 
 #[derive(Serialize)]
@@ -62,6 +64,8 @@ pub async fn get_status(State(state): State<AppState>) -> Json<StatusResponse> {
         public_key: state.identity.public_key.clone(),
         paired_devices: paired_dtos,
         active_call,
+        wifi_speaker_active: state.wifi_speaker_service.is_active(),
+        call_gateway_enabled: state.call_service.is_gateway_enabled().await,
     })
 }
 
@@ -188,6 +192,17 @@ pub async fn calls_action(
         }),
     });
 
+    if payload.action == "accept" || payload.action == "mute" || payload.action == "unmute" {
+        if state.wifi_speaker_service.is_active() {
+            info!("Muting/Stopping Wi-Fi Speaker due to active call action");
+            let _ = state.wifi_speaker_service.stop().await;
+            let _ = state.tx.send(WsMessage {
+                event: "WifiSpeakerStopped".to_string(),
+                data: serde_json::json!({ "reason": "phone_call" }),
+            });
+        }
+    }
+
     match state.call_service.execute_action(&payload.action).await {
         Ok(_) => {
             // Broadcast call event to websockets
@@ -225,6 +240,17 @@ pub async fn update_call_state(
     Json(payload): Json<ActiveCall>,
 ) -> (StatusCode, Json<serde_json::Value>) {
     info!("Call state update pushed: {:?}", payload);
+    
+    if payload.state != CallState::Disconnected {
+        if state.wifi_speaker_service.is_active() {
+            info!("Muting/Stopping Wi-Fi Speaker due to active call state");
+            let _ = state.wifi_speaker_service.stop().await;
+            let _ = state.tx.send(WsMessage {
+                event: "WifiSpeakerStopped".to_string(),
+                data: serde_json::json!({ "reason": "phone_call" }),
+            });
+        }
+    }
     
     let updated = state.call_service.update_call_state(payload.clone()).await;
     
@@ -504,5 +530,74 @@ pub async fn delete_file(
     }
     
     Ok(Json(serde_json::json!({ "success": true })))
+}
+
+#[derive(Deserialize)]
+pub struct SpeakerStartRequest {
+    pub device_id: String,
+    pub playback_mode: Option<String>,
+}
+
+pub async fn speaker_start(
+    State(state): State<AppState>,
+    Json(payload): Json<SpeakerStartRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    info!("Speaker start requested for device ID: {} with playback mode: {:?}", payload.device_id, payload.playback_mode);
+    
+    let ips = state.device_ips.lock().await;
+    let target_ip = match ips.get(&payload.device_id) {
+        Some(ip) => ip.clone(),
+        None => {
+            warn!("Device ID {} not found in active connection IPs", payload.device_id);
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                "success": false,
+                "error": format!("Device IP not found for ID: {}", payload.device_id)
+            })));
+        }
+    };
+    
+    match state.wifi_speaker_service.start(target_ip, payload.playback_mode).await {
+        Ok(_) => {
+            (StatusCode::OK, Json(serde_json::json!({ "success": true })))
+        }
+        Err(e) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+                "success": false,
+                "error": e.to_string()
+            })))
+        }
+    }
+}
+
+pub async fn speaker_stop(
+    State(state): State<AppState>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    info!("Speaker stop requested");
+    
+    match state.wifi_speaker_service.stop().await {
+        Ok(_) => {
+            (StatusCode::OK, Json(serde_json::json!({ "success": true })))
+        }
+        Err(e) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+                "success": false,
+                "error": e.to_string()
+            })))
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct GatewayToggleRequest {
+    pub enabled: bool,
+}
+
+pub async fn toggle_call_gateway(
+    State(state): State<AppState>,
+    Json(payload): Json<GatewayToggleRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    info!("Toggling Bluetooth call gateway to: {}", payload.enabled);
+    state.call_service.set_gateway_enabled(payload.enabled).await;
+    (StatusCode::OK, Json(serde_json::json!({ "success": true })))
 }
 

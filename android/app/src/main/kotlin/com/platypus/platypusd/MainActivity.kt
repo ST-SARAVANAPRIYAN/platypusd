@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.provider.Settings
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -80,6 +81,7 @@ class MainActivity : ComponentActivity() {
     // Settings State
     private val clipboardAutoSyncState = mutableStateOf(true)
     private val clipboardDirectionState = mutableStateOf("bidirectional")
+    private val isStoragePermissionGrantedState = mutableStateOf(true)
 
     // Files State
     private val currentPcPathState = mutableStateOf("")
@@ -87,6 +89,8 @@ class MainActivity : ComponentActivity() {
     private val filesSearchQueryState = mutableStateOf("")
     private val filesSortByState = mutableStateOf("name") // "name", "size", "date"
     private val filesSortAscendingState = mutableStateOf(true)
+    private val filesHideHiddenState = mutableStateOf(true)
+    private val filesLayoutState = mutableStateOf("list") // "list", "grid", "compact"
     private val isFileDownloadingState = mutableStateOf(false)
     private val downloadProgressState = mutableStateOf("")
 
@@ -170,6 +174,14 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            isStoragePermissionGrantedState.value = android.os.Environment.isExternalStorageManager()
+        } else {
+            isStoragePermissionGrantedState.value = androidx.core.content.ContextCompat.checkSelfPermission(
+                this, Manifest.permission.READ_EXTERNAL_STORAGE
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+
         if (currentTabState.value == "files") {
             fetchPcFiles(currentPcPathState.value)
         }
@@ -213,6 +225,12 @@ class MainActivity : ComponentActivity() {
             permissions.add(Manifest.permission.BLUETOOTH_ADMIN)
         }
         
+        // Add storage permissions for older Android versions
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            permissions.add(Manifest.permission.READ_EXTERNAL_STORAGE)
+            permissions.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        }
+        
         val missing = permissions.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
@@ -221,7 +239,45 @@ class MainActivity : ComponentActivity() {
             ActivityCompat.requestPermissions(this, missing.toTypedArray(), PERMISSION_REQUEST_CODE)
             return false
         }
+
+        // Request MANAGE_EXTERNAL_STORAGE for Android 11+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            if (!android.os.Environment.isExternalStorageManager()) {
+                try {
+                    val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                        data = Uri.parse("package:${packageName}")
+                    }
+                    startActivity(intent)
+                    return false
+                } catch (e: Exception) {
+                    val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                    startActivity(intent)
+                    return false
+                }
+            }
+        }
+        
         return true
+    }
+
+    private fun requestStoragePermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                    data = Uri.parse("package:${packageName}")
+                }
+                startActivity(intent)
+            } catch (e: Exception) {
+                val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                startActivity(intent)
+            }
+        } else {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE),
+                PERMISSION_REQUEST_CODE
+            )
+        }
     }
 
     private fun startQrCodeScanner() {
@@ -385,7 +441,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun downloadPcFile(path: String, fileName: String, shouldOpen: Boolean = false) {
+    private fun downloadPcFile(path: String, fileName: String, shouldOpen: Boolean = false, useCache: Boolean = false) {
         val sharedPrefs = getSharedPreferences("platypusd_prefs", Context.MODE_PRIVATE)
         val ip = sharedPrefs.getString("paired_host_ip", null)
         val port = sharedPrefs.getInt("paired_host_port", 8080)
@@ -415,7 +471,11 @@ class MainActivity : ComponentActivity() {
                             isFileDownloadingState.value = false
                         }
                         if (bytes != null) {
-                            saveDownloadedFile(fileName, bytes, shouldOpen)
+                            if (useCache) {
+                                saveCacheFile(fileName, bytes)
+                            } else {
+                                saveDownloadedFile(fileName, bytes, shouldOpen)
+                            }
                         }
                     } else {
                         runOnUiThread {
@@ -426,6 +486,20 @@ class MainActivity : ComponentActivity() {
                 }
             }
         })
+    }
+
+    private fun saveCacheFile(fileName: String, bytes: ByteArray) {
+        try {
+            val cacheFile = java.io.File(cacheDir, fileName)
+            cacheFile.writeBytes(bytes)
+            runOnUiThread {
+                openLocalFile(cacheFile)
+            }
+        } catch (e: Exception) {
+            runOnUiThread {
+                Toast.makeText(this, "Failed to preview file: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     private fun saveDownloadedFile(fileName: String, bytes: ByteArray, shouldOpen: Boolean) {
@@ -476,9 +550,14 @@ class MainActivity : ComponentActivity() {
 
     private fun getProcessedPcFiles(): List<JSONObject> {
         val query = filesSearchQueryState.value.lowercase().trim()
+        val hideHidden = filesHideHiddenState.value
         val filtered = pcFilesListState.filter {
-            val name = it.optString("name", "").lowercase()
-            query.isEmpty() || name.contains(query)
+            val name = it.optString("name", "")
+            if (hideHidden && name.startsWith(".")) {
+                false
+            } else {
+                query.isEmpty() || name.lowercase().contains(query)
+            }
         }
         
         val sorted = when (filesSortByState.value) {
@@ -602,6 +681,7 @@ class MainActivity : ComponentActivity() {
                 ) { tab ->
                     when (tab) {
                         "connection" -> ConnectionTabScreen()
+                        "audio" -> AudioTabScreen()
                         "clipboard" -> ClipboardTabScreen()
                         "files" -> FilesTabScreen()
                         "settings" -> SettingsTabScreen()
@@ -653,6 +733,7 @@ class MainActivity : ComponentActivity() {
         val currentTab by currentTabState
         val items = listOf(
             Triple("connection", "Link", Icons.Default.Info),
+            Triple("audio", "Audio", Icons.Default.VolumeUp),
             Triple("clipboard", "Clipboard", Icons.Default.Send),
             Triple("files", "Explorer", Icons.Default.Folder),
             Triple("settings", "Settings", Icons.Default.Settings)
@@ -780,98 +861,405 @@ class MainActivity : ComponentActivity() {
             }
 
             // Bluetooth Card Section
+            val btAdapter = BluetoothAdapter.getDefaultAdapter()
+            val isBluetoothEnabled = btAdapter != null && btAdapter.isEnabled
+
             Card(
                 modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isBluetoothEnabled) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.25f)
+                )
             ) {
                 Column(
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text("Bluetooth Audio Gateway", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                    Text(
-                        "Route phone audio calls automatically through your PC gateway connection. Pair with your desktop host below.",
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
-                    if (bondedDevices.isEmpty()) {
+                    
+                    if (!isBluetoothEnabled) {
                         Text(
-                            "No bonded bluetooth devices found. Check if your phone's Bluetooth is on and paired with the PC.",
-                            fontSize = 13.sp,
+                            "Bluetooth is currently turned OFF. Please turn on Bluetooth to discover and pair your desktop host for call routing.",
                             color = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.padding(vertical = 8.dp)
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium
                         )
                     } else {
-                        Column(
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            bondedDevices.forEach { device ->
-                                val address = device.address
-                                val isSelected = address == selectedMac
-                                val isDeviceConnected = ConnectionService.instance?.isBluetoothDeviceConnected(address) ?: false
-                                
-                                val cardBg = if (isSelected) {
-                                    if (isDarkModeState.value) Color(0xFF1B4D3E) else Color(0xFFE6F4EA)
-                                } else {
-                                    MaterialTheme.colorScheme.surface
-                                }
+                        Text(
+                            "Route phone audio calls automatically through your PC gateway connection. Pair with your desktop host below.",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
 
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(cardBg)
-                                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp))
-                                        .padding(12.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = device.name ?: "Unknown Device",
-                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                            fontSize = 14.sp
-                                        )
-                                        Text(address, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                        
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        Text(
-                                            text = if (isDeviceConnected) "LINK STATUS: CONNECTED" else "LINK STATUS: DISCONNECTED",
-                                            fontSize = 10.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = if (isDeviceConnected) Color(0xFF2E7D32) else MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
+                        if (bondedDevices.isEmpty()) {
+                            Text(
+                                "No bonded bluetooth devices found. Check if your phone's Bluetooth is on and paired with the PC.",
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+                        } else {
+                            Column(
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                bondedDevices.forEach { device ->
+                                    val address = device.address
+                                    val isSelected = address == selectedMac
+                                    val isDeviceConnected = ConnectionService.instance?.isBluetoothDeviceConnected(address) ?: false
                                     
-                                    Button(
-                                        onClick = {
-                                            if (isSelected) {
-                                                sharedPrefs.edit()
-                                                    .remove("selected_bluetooth_mac")
-                                                    .remove("selected_bluetooth_name")
-                                                    .apply()
-                                            } else {
-                                                sharedPrefs.edit()
-                                                    .putString("selected_bluetooth_mac", address)
-                                                    .putString("selected_bluetooth_name", device.name ?: "Desktop PC")
-                                                    .apply()
-                                            }
-                                            selectedBtMacState.value = sharedPrefs.getString("selected_bluetooth_mac", null)
-                                            val serviceIntent = Intent(this@MainActivity, ConnectionService::class.java).apply {
-                                                putExtra("CHECK_BT", true)
-                                            }
-                                            startService(serviceIntent)
-                                        },
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = if (isSelected) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary
-                                        ),
-                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                    val cardBg = if (isSelected) {
+                                        if (isDarkModeState.value) Color(0xFF1B4D3E) else Color(0xFFE6F4EA)
+                                    } else {
+                                        MaterialTheme.colorScheme.surface
+                                    }
+
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(cardBg)
+                                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp))
+                                            .padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Text(if (isSelected) "DESELECT" else "SELECT", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = device.name ?: "Unknown Device",
+                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                                fontSize = 14.sp
+                                            )
+                                            Text(address, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            Text(
+                                                text = if (isDeviceConnected) "LINK STATUS: CONNECTED" else "LINK STATUS: DISCONNECTED",
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = if (isDeviceConnected) Color(0xFF2E7D32) else MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        
+                                        Button(
+                                            onClick = {
+                                                if (isSelected) {
+                                                    sharedPrefs.edit()
+                                                        .remove("selected_bluetooth_mac")
+                                                        .remove("selected_bluetooth_name")
+                                                        .apply()
+                                                } else {
+                                                    sharedPrefs.edit()
+                                                        .putString("selected_bluetooth_mac", address)
+                                                        .putString("selected_bluetooth_name", device.name ?: "Desktop PC")
+                                                        .apply()
+                                                }
+                                                selectedBtMacState.value = sharedPrefs.getString("selected_bluetooth_mac", null)
+                                                val serviceIntent = Intent(this@MainActivity, ConnectionService::class.java).apply {
+                                                    putExtra("CHECK_BT", true)
+                                                }
+                                                startService(serviceIntent)
+                                            },
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = if (isSelected) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary
+                                            ),
+                                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                        ) {
+                                            Text(if (isSelected) "DESELECT" else "SELECT", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                        }
                                     }
                                 }
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    // ==========================================
+    // SCREEN 1.5: AUDIO & SOUND SYNC
+    // ==========================================
+    @Composable
+    fun AudioTabScreen() {
+        val context = LocalContext.current
+        val sharedPrefs = getSharedPreferences("platypusd_prefs", Context.MODE_PRIVATE)
+        val btAdapter = BluetoothAdapter.getDefaultAdapter()
+        val isBtEnabled = btAdapter != null && btAdapter.isEnabled
+        
+        // Audio states
+        var audioSyncEnabled by remember {
+            mutableStateOf(sharedPrefs.getBoolean("audio_sync_enabled", true))
+        }
+        var audioDirection by remember {
+            mutableStateOf(sharedPrefs.getString("audio_direction", "desktop_to_mobile") ?: "desktop_to_mobile")
+        }
+        val isWifiActive = ConnectionService.instance?.isUdpAudioActive ?: false
+        
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Text("Audio & Sound Sync", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+
+            // 1. Overall Master ON/OFF Switch
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                )
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Overall Audio Sync", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        Text(
+                            "Enable all audio sync & call routing features",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = audioSyncEnabled,
+                        onCheckedChange = { checked ->
+                            audioSyncEnabled = checked
+                            sharedPrefs.edit().putBoolean("audio_sync_enabled", checked).apply()
+                            
+                            // If disabled, also disable call sync service execution
+                            val callsActive = checked && audioDirection == "mobile_to_desktop"
+                            sharedPrefs.edit().putBoolean("calls_sync_enabled", callsActive).apply()
+                            val serviceIntent = Intent(context, ConnectionService::class.java).apply {
+                                putExtra("UPDATE_CALLS_SYNC", true)
+                                putExtra("CALLS_SYNC_ENABLED", callsActive)
+                            }
+                            context.startService(serviceIntent)
+                        }
+                    )
+                }
+            }
+
+            if (audioSyncEnabled) {
+                // 2. Audio Flow Direction Radio Options Card
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainer
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text("Audio Flow Direction", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        
+                        Row(
+                            modifier = Modifier.fillMaxWidth().clickable {
+                                audioDirection = "desktop_to_mobile"
+                                sharedPrefs.edit().putString("audio_direction", "desktop_to_mobile").apply()
+                                sharedPrefs.edit().putBoolean("calls_sync_enabled", false).apply()
+                                val serviceIntent = Intent(context, ConnectionService::class.java).apply {
+                                    putExtra("UPDATE_CALLS_SYNC", true)
+                                    putExtra("CALLS_SYNC_ENABLED", false)
+                                }
+                                context.startService(serviceIntent)
+                            },
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = audioDirection == "desktop_to_mobile",
+                                onClick = {
+                                    audioDirection = "desktop_to_mobile"
+                                    sharedPrefs.edit().putString("audio_direction", "desktop_to_mobile").apply()
+                                    sharedPrefs.edit().putBoolean("calls_sync_enabled", false).apply()
+                                    val serviceIntent = Intent(context, ConnectionService::class.java).apply {
+                                        putExtra("UPDATE_CALLS_SYNC", true)
+                                        putExtra("CALLS_SYNC_ENABLED", false)
+                                    }
+                                    context.startService(serviceIntent)
+                                }
+                            )
+                            Text("Desktop to Mobile (Phone as Speaker)", fontSize = 13.sp)
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth().clickable {
+                                audioDirection = "mobile_to_desktop"
+                                sharedPrefs.edit().putString("audio_direction", "mobile_to_desktop").apply()
+                                sharedPrefs.edit().putBoolean("calls_sync_enabled", true).apply()
+                                val serviceIntent = Intent(context, ConnectionService::class.java).apply {
+                                    putExtra("UPDATE_CALLS_SYNC", true)
+                                    putExtra("CALLS_SYNC_ENABLED", true)
+                                }
+                                context.startService(serviceIntent)
+                            },
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = audioDirection == "mobile_to_desktop",
+                                onClick = {
+                                    audioDirection = "mobile_to_desktop"
+                                    sharedPrefs.edit().putString("audio_direction", "mobile_to_desktop").apply()
+                                    sharedPrefs.edit().putBoolean("calls_sync_enabled", true).apply()
+                                    val serviceIntent = Intent(context, ConnectionService::class.java).apply {
+                                        putExtra("UPDATE_CALLS_SYNC", true)
+                                        putExtra("CALLS_SYNC_ENABLED", true)
+                                    }
+                                    context.startService(serviceIntent)
+                                }
+                            )
+                            Text("Mobile to Desktop (PC as Speaker/Mic)", fontSize = 13.sp)
+                        }
+                    }
+                }
+
+                // 3. Details Card based on Direction
+                if (audioDirection == "desktop_to_mobile") {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isWifiActive) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh
+                        )
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column {
+                                    Text("Wi-Fi Speaker Sync", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                    Text("Play laptop sound lossless over Wi-Fi", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                Icon(
+                                    imageVector = if (isWifiActive) Icons.Default.MusicNote else Icons.Default.MusicOff,
+                                    contentDescription = null,
+                                    tint = if (isWifiActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                                    Text("Status:", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(
+                                        text = if (isWifiActive) "Active (Streaming)" else "Idle (Standby)",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp,
+                                        color = if (isWifiActive) Color(0xFF2E7D32) else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                                    Text("Quality:", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text("48.0 kHz Stereo (PCM 16-bit)", fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                                }
+                                Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                                    Text("Port:", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text("UDP Port 9095", fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isBtEnabled) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.25f)
+                        )
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Text("Call Audio Routing Gateway", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+
+                            if (!isBtEnabled) {
+                                Text(
+                                    "Bluetooth is turned OFF. Call audio routing requires Bluetooth connection.",
+                                    color = MaterialTheme.colorScheme.error,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Button(
+                                    onClick = {
+                                        try {
+                                            val intent = Intent(Settings.ACTION_BLUETOOTH_SETTINGS)
+                                            context.startActivity(intent)
+                                        } catch (e: Exception) {
+                                            Toast.makeText(context, "Could not open Bluetooth settings", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text("Turn on Bluetooth")
+                                }
+                            } else {
+                                val selectedName = sharedPrefs.getString("selected_bluetooth_name", "None")
+                                val selectedMac = sharedPrefs.getString("selected_bluetooth_mac", null)
+                                val isDeviceConnected = if (selectedMac != null) {
+                                    ConnectionService.instance?.isBluetoothDeviceConnected(selectedMac) ?: false
+                                } else false
+
+                                Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                                    Text("Paired PC Gateway:", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(selectedName ?: "None", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                }
+
+                                Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                                    Text("Gateway Connection:", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(
+                                        text = if (isDeviceConnected) "Connected" else "Disconnected",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (isDeviceConnected) Color(0xFF2E7D32) else MaterialTheme.colorScheme.error
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier.padding(24.dp).fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.VolumeMute,
+                            contentDescription = null,
+                            modifier = Modifier.size(48.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            "Audio Sync Disabled",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            "Enable Overall Audio Sync switch above to configure sound sharing flows.",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
                     }
                 }
             }
@@ -963,11 +1351,51 @@ class MainActivity : ComponentActivity() {
         val sortBy by filesSortByState
         val sortAscending by filesSortAscendingState
 
-        val processedFiles = remember(pcFilesListState.size, query, sortBy, sortAscending) {
+        val processedFiles = remember(pcFilesListState.size, query, sortBy, sortAscending, filesHideHiddenState.value) {
             getProcessedPcFiles()
         }
 
         Column(modifier = Modifier.fillMaxSize()) {
+            val isStorageGranted by isStoragePermissionGrantedState
+            if (!isStorageGranted) {
+                Surface(
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "⚠️ Storage Access Required",
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            fontSize = 15.sp
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Platypus needs All Files Access permission to show and share files with your PC.",
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            fontSize = 12.sp,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Button(
+                            onClick = { requestStoragePermission() },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.error,
+                                contentColor = MaterialTheme.colorScheme.onError
+                            ),
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+                        ) {
+                            Text("Grant Permission", fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+
             // Path Navigation Header Bar
             Surface(
                 modifier = Modifier.fillMaxWidth(),
@@ -1001,11 +1429,11 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // Explorer Actions bar
+            // Explorer Actions bar - Row 1 (Search + Upload)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                    .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
@@ -1023,40 +1451,6 @@ class MainActivity : ComponentActivity() {
                     )
                 )
 
-                IconButton(onClick = {
-                    if (filesSortByState.value == "name") {
-                        if (filesSortAscendingState.value) {
-                            filesSortAscendingState.value = false
-                        } else {
-                            filesSortByState.value = "size"
-                            filesSortAscendingState.value = true
-                        }
-                    } else if (filesSortByState.value == "size") {
-                        if (filesSortAscendingState.value) {
-                            filesSortAscendingState.value = false
-                        } else {
-                            filesSortByState.value = "date"
-                            filesSortAscendingState.value = true
-                        }
-                    } else {
-                        if (filesSortAscendingState.value) {
-                            filesSortAscendingState.value = false
-                        } else {
-                            filesSortByState.value = "name"
-                            filesSortAscendingState.value = true
-                        }
-                    }
-                }) {
-                    Icon(
-                        imageVector = when (sortBy) {
-                            "size" -> Icons.Default.SortByAlpha
-                            "date" -> Icons.Default.Schedule
-                            else -> Icons.Default.Sort
-                        },
-                        contentDescription = "Sort Files"
-                    )
-                }
-
                 Button(
                     onClick = {
                         val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
@@ -1064,12 +1458,158 @@ class MainActivity : ComponentActivity() {
                         }
                         startActivityForResult(Intent.createChooser(intent, "Select File to Upload"), PICK_FILE_REQUEST_CODE)
                     },
-                    modifier = Modifier.height(40.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp)
+                    modifier = Modifier.height(48.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp)
                 ) {
-                    Icon(Icons.Default.Upload, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Upload", fontSize = 12.sp)
+                    Icon(Icons.Default.Upload, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Upload", fontSize = 13.sp)
+                }
+            }
+
+            // Explorer Actions bar - Row 2 (Layout + Options + Sort)
+            if (isConnected) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    // Layout Mode Selector (List, Grid, Compact)
+                    Row(
+                        modifier = Modifier
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+                            .padding(2.dp),
+                        horizontalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        val currentMode = filesLayoutState.value
+                        IconButton(
+                            onClick = { filesLayoutState.value = "list" },
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.List,
+                                contentDescription = "List View",
+                                tint = if (currentMode == "list") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        IconButton(
+                            onClick = { filesLayoutState.value = "grid" },
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.GridOn,
+                                contentDescription = "Grid View",
+                                tint = if (currentMode == "grid") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        IconButton(
+                            onClick = { filesLayoutState.value = "compact" },
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Menu,
+                                contentDescription = "Compact View",
+                                tint = if (currentMode == "compact") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    // Sort and Hidden Options Row
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        // Hide Hidden Switch as a compact filter chip style
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+                                .clickable { filesHideHiddenState.value = !filesHideHiddenState.value }
+                                .padding(horizontal = 8.dp, vertical = 6.dp)
+                        ) {
+                            Text(
+                                text = "Hide Hidden", 
+                                fontSize = 11.sp, 
+                                fontWeight = FontWeight.Medium,
+                                color = if (filesHideHiddenState.value) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Checkbox(
+                                checked = filesHideHiddenState.value,
+                                onCheckedChange = { filesHideHiddenState.value = it },
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+
+                        // Sort dropdown box
+                        var sortMenuExpanded by remember { mutableStateOf(false) }
+                        Box {
+                            IconButton(
+                                onClick = { sortMenuExpanded = true },
+                                modifier = Modifier
+                                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+                                    .size(36.dp)
+                            ) {
+                                Icon(
+                                    imageVector = when (sortBy) {
+                                        "size" -> Icons.Default.SortByAlpha
+                                        "date" -> Icons.Default.Schedule
+                                        else -> Icons.Default.Sort
+                                    },
+                                    contentDescription = "Sort Options",
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = sortMenuExpanded,
+                                onDismissRequest = { sortMenuExpanded = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Sort by Name") },
+                                    onClick = {
+                                        filesSortByState.value = "name"
+                                        sortMenuExpanded = false
+                                    },
+                                    leadingIcon = { if (sortBy == "name") Icon(Icons.Default.Check, null) else Spacer(Modifier.size(24.dp)) }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Sort by Size") },
+                                    onClick = {
+                                        filesSortByState.value = "size"
+                                        sortMenuExpanded = false
+                                    },
+                                    leadingIcon = { if (sortBy == "size") Icon(Icons.Default.Check, null) else Spacer(Modifier.size(24.dp)) }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Sort by Date") },
+                                    onClick = {
+                                        filesSortByState.value = "date"
+                                        sortMenuExpanded = false
+                                    },
+                                    leadingIcon = { if (sortBy == "date") Icon(Icons.Default.Check, null) else Spacer(Modifier.size(24.dp)) }
+                                )
+                                HorizontalDivider()
+                                DropdownMenuItem(
+                                    text = { Text("Ascending") },
+                                    onClick = {
+                                        filesSortAscendingState.value = true
+                                        sortMenuExpanded = false
+                                    },
+                                    leadingIcon = { if (sortAscending) Icon(Icons.Default.Check, null) else Spacer(Modifier.size(24.dp)) }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Descending") },
+                                    onClick = {
+                                        filesSortAscendingState.value = false
+                                        sortMenuExpanded = false
+                                    },
+                                    leadingIcon = { if (!sortAscending) Icon(Icons.Default.Check, null) else Spacer(Modifier.size(24.dp)) }
+                                )
+                            }
+                        }
+                    }
                 }
             }
 
@@ -1091,59 +1631,163 @@ class MainActivity : ComponentActivity() {
                     )
                 }
             } else {
-                LazyColumn(modifier = Modifier.fillMaxSize()) {
-                    items(processedFiles) { item ->
-                        val name = item.getString("name")
-                        val isDir = item.getBoolean("is_dir")
-                        val path = item.getString("path")
-                        val size = item.getLong("size")
-                        
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    if (isDir) {
-                                        fetchPcFiles(path)
-                                    } else {
-                                        downloadPcFile(path, name, shouldOpen = true)
+                val layoutMode = filesLayoutState.value
+                if (layoutMode == "grid") {
+                    androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
+                        columns = androidx.compose.foundation.lazy.grid.GridCells.Fixed(3),
+                        modifier = Modifier.fillMaxSize().padding(8.dp)
+                    ) {
+                        items(processedFiles.size) { index ->
+                            val item = processedFiles[index]
+                            val name = item.getString("name")
+                            val isDir = item.getBoolean("is_dir")
+                            val path = item.getString("path")
+                            
+                            Card(
+                                modifier = Modifier
+                                    .padding(4.dp)
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        if (isDir) {
+                                            fetchPcFiles(path)
+                                        } else {
+                                            downloadPcFile(path, name, shouldOpen = true, useCache = true)
+                                        }
+                                    },
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                                )
+                            ) {
+                                Box(modifier = Modifier.fillMaxWidth()) {
+                                    Column(
+                                        modifier = Modifier.padding(8.dp).fillMaxWidth(),
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        Icon(
+                                            imageVector = if (isDir) Icons.Default.Folder else Icons.Default.InsertDriveFile,
+                                            contentDescription = null,
+                                            tint = if (isDir) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(40.dp)
+                                        )
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            text = name,
+                                            fontWeight = if (isDir) FontWeight.Bold else FontWeight.Normal,
+                                            fontSize = 11.sp,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis,
+                                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                            modifier = Modifier.height(32.dp)
+                                        )
+                                    }
+                                    IconButton(
+                                        onClick = {
+                                            activeDialogState.value = DialogType.FileActions(item)
+                                        },
+                                        modifier = Modifier.align(Alignment.TopEnd).size(24.dp).padding(4.dp)
+                                    ) {
+                                        Icon(Icons.Default.MoreVert, contentDescription = "Options", modifier = Modifier.size(16.dp))
                                     }
                                 }
-                                .padding(horizontal = 16.dp, vertical = 12.dp)
-                                .border(0.dp, Color.Transparent),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = if (isDir) Icons.Default.Folder else Icons.Default.InsertDriveFile,
-                                contentDescription = null,
-                                tint = if (isDir) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(28.dp)
-                            )
-                            Spacer(modifier = Modifier.width(16.dp))
-                            Column(modifier = Modifier.weight(1f)) {
+                            }
+                        }
+                    }
+                } else if (layoutMode == "compact") {
+                    LazyColumn(modifier = Modifier.fillMaxSize()) {
+                        items(processedFiles) { item ->
+                            val name = item.getString("name")
+                            val isDir = item.getBoolean("is_dir")
+                            val path = item.getString("path")
+                            
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        if (isDir) {
+                                            fetchPcFiles(path)
+                                        } else {
+                                            downloadPcFile(path, name, shouldOpen = true, useCache = true)
+                                        }
+                                    }
+                                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = if (isDir) Icons.Default.Folder else Icons.Default.InsertDriveFile,
+                                    contentDescription = null,
+                                    tint = if (isDir) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
                                 Text(
                                     text = name,
                                     fontWeight = if (isDir) FontWeight.Bold else FontWeight.Normal,
-                                    fontSize = 14.sp,
-                                    color = MaterialTheme.colorScheme.onSurface
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.weight(1f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
-                                if (!isDir) {
-                                    val sizeKb = size / 1024
-                                    Text("$sizeKb KB", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                IconButton(
+                                    onClick = {
+                                        activeDialogState.value = DialogType.FileActions(item)
+                                    },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(Icons.Default.MoreVert, contentDescription = "Options", modifier = Modifier.size(16.dp))
                                 }
                             }
-                            IconButton(onClick = {
-                                activeDialogState.value = DialogType.FileDetails(
-                                    name = name,
-                                    path = path,
-                                    size = size,
-                                    isDir = isDir,
-                                    lastModified = item.optLong("last_modified", 0)
-                                )
-                            }) {
-                                Icon(Icons.Default.MoreVert, contentDescription = "File Details")
-                            }
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
                         }
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    }
+                } else { // "list"
+                    LazyColumn(modifier = Modifier.fillMaxSize()) {
+                        items(processedFiles) { item ->
+                            val name = item.getString("name")
+                            val isDir = item.getBoolean("is_dir")
+                            val path = item.getString("path")
+                            val size = item.getLong("size")
+                            
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        if (isDir) {
+                                            fetchPcFiles(path)
+                                        } else {
+                                            downloadPcFile(path, name, shouldOpen = true, useCache = true)
+                                        }
+                                    }
+                                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = if (isDir) Icons.Default.Folder else Icons.Default.InsertDriveFile,
+                                    contentDescription = null,
+                                    tint = if (isDir) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(28.dp)
+                                )
+                                Spacer(modifier = Modifier.width(16.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = name,
+                                        fontWeight = if (isDir) FontWeight.Bold else FontWeight.Normal,
+                                        fontSize = 14.sp,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    if (!isDir) {
+                                        val sizeKb = size / 1024
+                                        Text("$sizeKb KB", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
+                                IconButton(onClick = {
+                                    activeDialogState.value = DialogType.FileActions(item)
+                                }) {
+                                    Icon(Icons.Default.MoreVert, contentDescription = "Options")
+                                }
+                            }
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        }
                     }
                 }
             }
@@ -1242,6 +1886,62 @@ class MainActivity : ComponentActivity() {
                                 )
                             }
                         }
+                    }
+                }
+            }
+
+            // Phone Call Settings Card
+            val btAdapter = BluetoothAdapter.getDefaultAdapter()
+            val isBtEnabled = btAdapter != null && btAdapter.isEnabled
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isBtEnabled) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.25f)
+                )
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("Call Options", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    if (!isBtEnabled) {
+                        Text(
+                            text = "Bluetooth is turned off. Please turn on Bluetooth to configure call settings.",
+                            color = MaterialTheme.colorScheme.error,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Enable Phone Calls", fontSize = 14.sp)
+                            Text("Requires Bluetooth pairing & permissions", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        
+                        var callsEnabled by remember {
+                            mutableStateOf(sharedPrefs.getBoolean("calls_sync_enabled", true))
+                        }
+                        
+                        Switch(
+                            checked = callsEnabled && isBtEnabled,
+                            enabled = isBtEnabled,
+                            onCheckedChange = { checked ->
+                                callsEnabled = checked
+                                sharedPrefs.edit().putBoolean("calls_sync_enabled", checked).apply()
+                                
+                                val serviceIntent = Intent(this@MainActivity, ConnectionService::class.java).apply {
+                                    putExtra("UPDATE_CALLS_SYNC", true)
+                                    putExtra("CALLS_SYNC_ENABLED", checked)
+                                }
+                                startService(serviceIntent)
+                            }
+                        )
                     }
                 }
             }
@@ -1500,6 +2200,9 @@ class MainActivity : ComponentActivity() {
                 val item = dialog.json
                 val name = item.getString("name")
                 val path = item.getString("path")
+                val size = item.optLong("size", 0)
+                val isDir = item.optBoolean("is_dir", false)
+                val lastModified = item.optLong("last_modified", 0)
 
                 AlertDialog(
                     onDismissRequest = { activeDialog = null },
@@ -1507,18 +2210,38 @@ class MainActivity : ComponentActivity() {
                     text = { Text("Perform actions on the selected file '$name':") },
                     confirmButton = {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                            Button(
-                                onClick = {
-                                    downloadPcFile(path, name)
-                                    activeDialog = null
-                                },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Icon(Icons.Default.Download, contentDescription = null)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Download to Mobile")
+                            if (!isDir) {
+                                Button(
+                                    onClick = {
+                                        downloadPcFile(path, name)
+                                        activeDialog = null
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Icon(Icons.Default.Download, contentDescription = null)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Download to Mobile")
+                                }
                             }
                             
+                            Button(
+                                onClick = {
+                                    activeDialog = DialogType.FileDetails(
+                                        name = name,
+                                        path = path,
+                                        size = size,
+                                        isDir = isDir,
+                                        lastModified = lastModified
+                                    )
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
+                            ) {
+                                Icon(Icons.Default.Info, contentDescription = null)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("View Properties")
+                            }
+
                             Button(
                                 onClick = {
                                     deletePcFile(path)
@@ -1535,14 +2258,14 @@ class MainActivity : ComponentActivity() {
                             OutlinedButton(
                                 onClick = { activeDialog = null },
                                 modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text("Cancel")
+                                ) {
+                                    Text("Cancel")
+                                }
                             }
-                        }
-                    },
-                    dismissButton = {} // Actions stacked vertically in confirmButton
-                )
-            }
+                        },
+                        dismissButton = {} // Actions stacked vertically in confirmButton
+                    )
+                }
             null -> {}
         }
     }

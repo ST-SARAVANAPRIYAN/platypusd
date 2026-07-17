@@ -25,6 +25,7 @@ pub struct CallService {
     loaded_modules: Arc<Mutex<Vec<String>>>,
     bluetooth_mac: Arc<Mutex<Option<String>>>,
     original_bluetooth_profile: Arc<Mutex<Option<String>>>,
+    pub gateway_enabled: Arc<Mutex<bool>>,
 }
 
 impl CallService {
@@ -34,19 +35,48 @@ impl CallService {
             loaded_modules: Arc::new(Mutex::new(Vec::new())),
             bluetooth_mac: Arc::new(Mutex::new(None)),
             original_bluetooth_profile: Arc::new(Mutex::new(None)),
+            gateway_enabled: Arc::new(Mutex::new(true)),
         }
     }
 
     pub async fn set_bluetooth_mac(&self, mac: Option<String>) {
         let mut b_mac = self.bluetooth_mac.lock().await;
-        *b_mac = mac;
+        *b_mac = mac.clone();
+        if let Some(ref m) = mac {
+            let active = self.active_call.lock().await;
+            if active.is_none() {
+                let _ = set_card_profile_off(m).await;
+            }
+        }
+    }
+
+    pub async fn set_gateway_enabled(&self, enabled: bool) {
+        let mut g = self.gateway_enabled.lock().await;
+        *g = enabled;
+        if !enabled {
+            let _ = self.cleanup_audio_routing().await;
+            if let Some(ref m) = *self.bluetooth_mac.lock().await {
+                let _ = set_card_profile_off(m).await;
+            }
+        }
+    }
+
+    pub async fn is_gateway_enabled(&self) -> bool {
+        *self.gateway_enabled.lock().await
     }
 
     pub async fn update_call_state(&self, call: ActiveCall) -> Option<ActiveCall> {
         let mut active = self.active_call.lock().await;
         info!("Updating call state to: {:?}", call);
         
-        if call.state == CallState::Disconnected {
+        if !*self.gateway_enabled.lock().await {
+            if call.state == CallState::Disconnected {
+                active.take()
+            } else {
+                *active = Some(call.clone());
+                Some(call)
+            }
+        } else if call.state == CallState::Disconnected {
             let old = active.take();
             // Clean up any audio routing setup
             if let Err(e) = self.cleanup_audio_routing().await {
@@ -135,6 +165,10 @@ impl CallService {
     }
 
     async fn setup_audio_routing(&self) -> anyhow::Result<()> {
+        if !*self.gateway_enabled.lock().await {
+            info!("Call Audio Routing is disabled. Skipping setup.");
+            return Ok(());
+        }
         // Prevent duplicate loopbacks
         {
             let modules = self.loaded_modules.lock().await;
@@ -291,11 +325,6 @@ impl CallService {
         };
         
         if let Some(ref mac) = mac_opt {
-            let orig_profile = {
-                let mut orig = self.original_bluetooth_profile.lock().await;
-                orig.take()
-            };
-            
             let card_name = match find_bluetooth_card(mac).await {
                 Some(name) => name,
                 None => {
@@ -304,7 +333,7 @@ impl CallService {
                 }
             };
             
-            let profile_to_set = orig_profile.unwrap_or_else(|| "a2dp-sink".to_string());
+            let profile_to_set = "off".to_string();
             info!("Restoring card {} profile to {}", card_name, profile_to_set);
             let _ = Command::new("pactl")
                 .args(&["set-card-profile", &card_name, &profile_to_set])
@@ -314,6 +343,17 @@ impl CallService {
             
         Ok(())
     }
+}
+
+async fn set_card_profile_off(mac: &str) -> anyhow::Result<()> {
+    if let Some(card_name) = find_bluetooth_card(mac).await {
+        info!("Setting Bluetooth card {} profile to off", card_name);
+        let _ = Command::new("pactl")
+            .args(&["set-card-profile", &card_name, "off"])
+            .output()
+            .await;
+    }
+    Ok(())
 }
 
 async fn find_bluetooth_card(mac: &str) -> Option<String> {

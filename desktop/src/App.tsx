@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import QRCode from 'qrcode';
-import { LayoutDashboard, Clipboard, Folder, Settings } from 'lucide-react';
+import { LayoutDashboard, Clipboard, Folder, Settings, Volume2, VolumeX } from 'lucide-react';
 
 interface PairedDevice {
   device_id: string;
@@ -26,13 +26,25 @@ interface StatusData {
   public_key: string;
   paired_devices: PairedDevice[];
   active_call: ActiveCall | null;
+  wifi_speaker_active: boolean;
+  call_gateway_enabled: boolean;
 }
 
 export default function App() {
   const wsRef = useRef<WebSocket | null>(null);
   const [status, setStatus] = useState<StatusData | null>(null);
+  const statusRef = useRef(status);
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
   const [error, setError] = useState<string | null>(null);
   const [activeCall, setActiveCall] = useState<ActiveCall | null>(null);
+  const [wifiSpeakerActive, setWifiSpeakerActive] = useState<boolean>(false);
+  const [startingSpeaker, setStartingSpeaker] = useState<boolean>(false);
+  const [audioSyncEnabled, setAudioSyncEnabled] = useState<boolean>(true);
+  const [audioDirection, setAudioDirection] = useState<'desktop_to_mobile' | 'mobile_to_desktop'>('desktop_to_mobile');
+  const [desktopToMobilePlaybackMode, setDesktopToMobilePlaybackMode] = useState<'destination_only' | 'both'>('destination_only');
+  const [mobileToDesktopPlaybackMode, setMobileToDesktopPlaybackMode] = useState<'destination_only' | 'both'>('destination_only');
   const [lastClipboard, setLastClipboard] = useState<string>('');
   const [clipboardInput, setClipboardInput] = useState<string>('');
   const [isDaemonOnline, setIsDaemonOnline] = useState<boolean>(false);
@@ -52,6 +64,7 @@ export default function App() {
   const [mobileSortOrder, setMobileSortOrder] = useState<'asc' | 'desc'>('asc');
   const [selectedFileInfo, setSelectedFileInfo] = useState<any | null>(null);
   const [viewMode, setViewMode] = useState<'list' | 'grid' | 'compact'>('list');
+  const [hideHiddenFiles, setHideHiddenFiles] = useState<boolean>(true);
 
   const showToast = (message: string) => {
     const toast = document.getElementById('toast');
@@ -92,28 +105,7 @@ export default function App() {
 
 
 
-  const deleteMobileFile = async (filePath: string) => {
-    const connected = status?.paired_devices.filter(d => d.is_online) || [];
-    if (!connected.length || !connected[0].ip) return;
-    if (!confirm("Are you sure you want to delete this file/folder from your mobile device?")) return;
-    
-    const phoneIp = connected[0].ip;
-    const url = `http://${phoneIp}:9090/delete?path=${encodeURIComponent(filePath)}`;
-    try {
-      const res = await fetch(url, { method: 'DELETE' });
-      if (res.ok) {
-        fetchMobileFilesList(mobilePath || '/sdcard');
-        showToast("Deleted successfully!");
-        if (selectedFileInfo && selectedFileInfo.path === filePath) {
-          setSelectedFileInfo(null);
-        }
-      } else {
-        alert("Delete failed: " + res.statusText);
-      }
-    } catch (e: any) {
-      alert("Delete failed: " + e.message);
-    }
-  };
+
 
 
 
@@ -123,7 +115,10 @@ export default function App() {
     sortBy: 'name' | 'size' | 'date',
     sortOrder: 'asc' | 'desc'
   ) => {
-    let result = files.filter(f => f.name.toLowerCase().includes(search.toLowerCase()));
+    let result = files.filter(f => {
+      if (hideHiddenFiles && f.name.startsWith('.')) return false;
+      return f.name.toLowerCase().includes(search.toLowerCase());
+    });
     result.sort((a, b) => {
       if (a.is_dir && !b.is_dir) return -1;
       if (!a.is_dir && b.is_dir) return 1;
@@ -142,27 +137,39 @@ export default function App() {
 
 
 
-  const fetchMobileFilesList = async (targetPath: string) => {
+  const fetchMobileFilesList = async (targetPath: string, retryCount = 0) => {
     const connected = status?.paired_devices.filter(d => d.is_online) || [];
     if (!connected.length || !connected[0].ip) {
       return;
     }
     const phoneIp = connected[0].ip;
-    setLoadingMobile(true);
+    const path = targetPath || '/sdcard';
+    if (retryCount === 0) {
+      setLoadingMobile(true);
+    }
     try {
-      const url = `http://${phoneIp}:9090/list?path=${encodeURIComponent(targetPath)}`;
+      const url = `http://${phoneIp}:9090/list?path=${encodeURIComponent(path)}`;
       const res = await fetch(url);
       if (res.ok) {
         const data = await res.json();
         setMobileFiles(data);
-        setMobilePath(targetPath);
+        setMobilePath(path);
+        setLoadingMobile(false);
       } else {
         console.error("Failed to fetch mobile files:", res.statusText);
+        if (retryCount < 3) {
+          setTimeout(() => fetchMobileFilesList(path, retryCount + 1), 600);
+        } else {
+          setLoadingMobile(false);
+        }
       }
     } catch (e) {
-      console.error(e);
-    } finally {
-      setLoadingMobile(false);
+      console.error("Network error fetching mobile files, retrying...", e);
+      if (retryCount < 3) {
+        setTimeout(() => fetchMobileFilesList(path, retryCount + 1), 600);
+      } else {
+        setLoadingMobile(false);
+      }
     }
   };
 
@@ -176,8 +183,22 @@ export default function App() {
     if (!connected.length || !connected[0].ip) return;
     const phoneIp = connected[0].ip;
     
-    const fileUrl = `http://${phoneIp}:9090/download?path=${encodeURIComponent(file.path)}`;
+    const fileUrl = `http://${phoneIp}:9090/view?path=${encodeURIComponent(file.path)}`;
     window.open(fileUrl, '_blank');
+  };
+
+  const downloadMobileFile = (file: any) => {
+    const connected = status?.paired_devices.filter(d => d.is_online) || [];
+    if (!connected.length || !connected[0].ip) return;
+    const phoneIp = connected[0].ip;
+    
+    const fileUrl = `http://${phoneIp}:9090/download?path=${encodeURIComponent(file.path)}`;
+    const link = document.createElement('a');
+    link.href = fileUrl;
+    link.download = file.name;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   const sendWebSocketCommand = (command: string, data: any = {}) => {
@@ -194,7 +215,7 @@ export default function App() {
     if (activeTab === 'files' && isDaemonOnline) {
       sendWebSocketCommand('StartFileServer');
       const timer = setTimeout(() => {
-        const connected = status?.paired_devices.filter(d => d.is_online) || [];
+        const connected = statusRef.current?.paired_devices.filter(d => d.is_online) || [];
         if (connected.length && connected[0].ip) {
           fetchMobileFilesList(mobilePath || '');
         }
@@ -205,7 +226,17 @@ export default function App() {
         sendWebSocketCommand('StopFileServer');
       };
     }
-  }, [activeTab, isDaemonOnline, status]);
+  }, [activeTab, isDaemonOnline]);
+
+  const isPhoneOnline = status?.paired_devices.some(d => d.is_online) || false;
+  useEffect(() => {
+    if (activeTab === 'files' && isPhoneOnline) {
+      const connected = status?.paired_devices.filter(d => d.is_online) || [];
+      if (connected.length && connected[0].ip) {
+        fetchMobileFilesList(mobilePath || '');
+      }
+    }
+  }, [activeTab, isPhoneOnline]);
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   const [palette, setPalette] = useState<string>(() => {
     return localStorage.getItem('theme-palette') || 'purple';
@@ -244,6 +275,15 @@ export default function App() {
       const data: StatusData = await res.json();
       setStatus(data);
       setIsDaemonOnline(true);
+      setWifiSpeakerActive(data.wifi_speaker_active);
+      
+      if (data.call_gateway_enabled) {
+        setAudioSyncEnabled(true);
+        setAudioDirection('mobile_to_desktop');
+      } else if (data.wifi_speaker_active) {
+        setAudioSyncEnabled(true);
+        setAudioDirection('desktop_to_mobile');
+      }
       if (data.active_call) {
         setActiveCall(data.active_call);
       }
@@ -252,6 +292,43 @@ export default function App() {
       setError(err.message || 'Could not connect to platypusd daemon');
       setStatus(null);
       setIsDaemonOnline(false);
+    }
+  };
+
+  const toggleWifiSpeaker = async () => {
+    const connected = status?.paired_devices.filter(d => d.is_online) || [];
+    if (connected.length === 0) {
+      alert("No paired mobile device is online over Wi-Fi.");
+      return;
+    }
+    
+    setStartingSpeaker(true);
+    try {
+      if (wifiSpeakerActive) {
+        const res = await fetch('http://localhost:8080/api/v1/speaker/stop', { method: 'POST' });
+        if (!res.ok) throw new Error('Failed to stop Wi-Fi Speaker');
+        setWifiSpeakerActive(false);
+        showToast('Wi-Fi Speaker Stopped');
+      } else {
+        const res = await fetch('http://localhost:8080/api/v1/speaker/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            device_id: connected[0].device_id,
+            playback_mode: desktopToMobilePlaybackMode
+          })
+        });
+        if (!res.ok) {
+          const errData = await res.json();
+          throw new Error(errData.error || 'Failed to start Wi-Fi Speaker');
+        }
+        setWifiSpeakerActive(true);
+        showToast('Wi-Fi Speaker Started!');
+      }
+    } catch (err: any) {
+      alert(`Wi-Fi Speaker Error: ${err.message}`);
+    } finally {
+      setStartingSpeaker(false);
     }
   };
 
@@ -320,6 +397,32 @@ export default function App() {
   }, [status]);
 
   useEffect(() => {
+    if (!isDaemonOnline) return;
+    
+    const syncBackend = async () => {
+      try {
+        const gatewayShouldBeActive = audioSyncEnabled && audioDirection === 'mobile_to_desktop';
+        await fetch('http://localhost:8080/api/v1/calls/gateway/toggle', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: gatewayShouldBeActive })
+        });
+
+        const speakerShouldBeActive = audioSyncEnabled && audioDirection === 'desktop_to_mobile';
+        if (!speakerShouldBeActive && wifiSpeakerActive) {
+          await fetch('http://localhost:8080/api/v1/speaker/stop', { method: 'POST' });
+          setWifiSpeakerActive(false);
+          showToast('Wi-Fi Speaker Stopped');
+        }
+      } catch (err) {
+        console.error("Failed to sync audio state to backend:", err);
+      }
+    };
+    
+    syncBackend();
+  }, [audioSyncEnabled, audioDirection, isDaemonOnline]);
+
+  useEffect(() => {
     fetchStatus();
     fetchClipboardConfig();
 
@@ -357,6 +460,9 @@ export default function App() {
             setClipAutoSync(payload.data.auto_sync);
           } else if (payload.event === 'ClipboardSynced') {
             setLastClipboard(payload.data.text);
+          } else if (payload.event === 'WifiSpeakerStopped') {
+            setWifiSpeakerActive(false);
+            showToast('Wi-Fi Speaker Stopped');
           } else if (
             payload.event === 'DeviceConnected' ||
             payload.event === 'DeviceDisconnected' ||
@@ -469,6 +575,13 @@ export default function App() {
             >
               <span className="btn-icon"><Folder size={18} /></span>
               <span className="btn-text">File Explorer</span>
+            </button>
+            <button 
+              className={`sidebar-btn ${activeTab === 'speaker' ? 'active' : ''}`} 
+              onClick={() => setActiveTab('speaker')}
+            >
+              <span className="btn-icon"><Volume2 size={18} /></span>
+              <span className="btn-text">Audio Sync</span>
             </button>
             <button 
               className={`sidebar-btn ${activeTab === 'settings' ? 'active' : ''}`} 
@@ -742,7 +855,7 @@ export default function App() {
                     {status?.paired_devices.some(d => d.is_online) ? (
                       <>
                         {/* Toolbar: Navigation Address and Action Buttons */}
-                        <menu style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem', marginBottom: '1rem', padding: 0, margin: '0 0 1.25rem 0' }}>
+                        <menu style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginBottom: '1.25rem', padding: 0, margin: '0 0 1.5rem 0' }}>
                           
                           {/* Search, Layout toggles and Upload */}
                           <div style={{ display: 'flex', gap: '0.75rem', width: '100%', flexWrap: 'wrap', alignItems: 'center' }}>
@@ -752,28 +865,28 @@ export default function App() {
                               placeholder="Search current directory..." 
                               value={mobileSearch}
                               onChange={(e) => setMobileSearch(e.target.value)}
-                              style={{ flexGrow: 1, minWidth: '220px', padding: '0.6rem 1rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-main)' }}
+                              style={{ flexGrow: 1, minWidth: '220px', padding: '0.55rem 1rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-main)', fontSize: '0.85rem' }}
                             />
 
                             {/* Layout View Toggles */}
-                            <div style={{ display: 'flex', gap: '0.2rem', background: 'var(--bg-primary)', padding: '3px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                            <div style={{ display: 'flex', gap: '0.25rem', background: 'var(--bg-secondary)', padding: '4px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
                               <button 
                                 className={`btn btn-sm ${viewMode === 'list' ? 'btn-primary' : 'btn-secondary'}`} 
-                                style={{ padding: '0.35rem 0.75rem', borderRadius: '6px', fontSize: '0.8rem' }}
+                                style={{ padding: '0.35rem 0.75rem', borderRadius: '6px', fontSize: '0.8rem', border: 'none' }}
                                 onClick={() => setViewMode('list')}
                               >
                                 List
                               </button>
                               <button 
                                 className={`btn btn-sm ${viewMode === 'grid' ? 'btn-primary' : 'btn-secondary'}`} 
-                                style={{ padding: '0.35rem 0.75rem', borderRadius: '6px', fontSize: '0.8rem' }}
+                                style={{ padding: '0.35rem 0.75rem', borderRadius: '6px', fontSize: '0.8rem', border: 'none' }}
                                 onClick={() => setViewMode('grid')}
                               >
                                 Grid
                               </button>
                               <button 
                                 className={`btn btn-sm ${viewMode === 'compact' ? 'btn-primary' : 'btn-secondary'}`} 
-                                style={{ padding: '0.35rem 0.75rem', borderRadius: '6px', fontSize: '0.8rem' }}
+                                style={{ padding: '0.35rem 0.75rem', borderRadius: '6px', fontSize: '0.8rem', border: 'none' }}
                                 onClick={() => setViewMode('compact')}
                               >
                                 Compact
@@ -781,7 +894,7 @@ export default function App() {
                             </div>
 
                             {/* File picker Upload */}
-                            <label className="btn btn-primary btn-sm" style={{ cursor: 'pointer', margin: 0, display: 'inline-flex', alignItems: 'center' }}>
+                            <label className="btn btn-primary btn-sm" style={{ cursor: 'pointer', margin: 0, display: 'inline-flex', alignItems: 'center', height: '34px', padding: '0 1rem', borderRadius: '8px', fontSize: '0.8rem' }}>
                               Upload File
                               <input 
                                 type="file" 
@@ -795,10 +908,11 @@ export default function App() {
                           </div>
 
                           {/* Path address and Sort params */}
-                          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', width: '100%', flexWrap: 'wrap' }}>
+                          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', width: '100%', flexWrap: 'wrap', justifyContent: 'space-between' }}>
                             <nav style={{ display: 'flex', gap: '0.4rem', flexGrow: 1, alignItems: 'center', overflow: 'hidden' }}>
                               <button 
                                 className="btn btn-secondary btn-sm"
+                                style={{ height: '34px', padding: '0 0.85rem', borderRadius: '6px', fontSize: '0.8rem' }}
                                 onClick={() => {
                                   if (mobilePath.includes('/')) {
                                     const parent = mobilePath.substring(0, mobilePath.lastIndexOf('/'));
@@ -808,7 +922,7 @@ export default function App() {
                               >
                                 Up
                               </button>
-                              <code style={{ flexGrow: 1, padding: '0.45rem 0.75rem', background: 'var(--bg-primary)', borderRadius: '6px', fontSize: '0.85rem', overflowX: 'auto', whiteSpace: 'nowrap', border: '1px solid var(--border-color)', display: 'block' }}>
+                              <code style={{ flexGrow: 1, padding: '0.45rem 0.75rem', background: 'var(--bg-primary)', borderRadius: '6px', fontSize: '0.85rem', overflowX: 'auto', whiteSpace: 'nowrap', border: '1px solid var(--border-color)', display: 'block', fontFamily: 'monospace' }}>
                                 {mobilePath || '/sdcard'}
                               </code>
                             </nav>
@@ -818,7 +932,7 @@ export default function App() {
                               <select 
                                 value={mobileSort} 
                                 onChange={(e) => setMobileSort(e.target.value as any)}
-                                style={{ padding: '0.3rem 0.5rem', borderRadius: '4px', fontSize: '0.8rem', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-main)' }}
+                                style={{ padding: '0.35rem 0.50rem', borderRadius: '6px', fontSize: '0.8rem', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-main)', height: '34px' }}
                               >
                                 <option value="name">Name</option>
                                 <option value="size">Size</option>
@@ -826,11 +940,20 @@ export default function App() {
                               </select>
                               <button 
                                 className="btn btn-secondary btn-sm"
-                                style={{ padding: '0.2rem 0.6rem !important', fontSize: '0.75rem !important' }}
+                                style={{ padding: '0.35rem 0.75rem', borderRadius: '6px', fontSize: '0.8rem', height: '34px' }}
                                 onClick={() => setMobileSortOrder(p => p === 'asc' ? 'desc' : 'asc')}
                               >
                                 {mobileSortOrder === 'asc' ? 'Asc' : 'Desc'}
                               </button>
+                              <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.8rem', cursor: 'pointer', userSelect: 'none', marginLeft: '0.5rem' }}>
+                                <input 
+                                  type="checkbox" 
+                                  checked={hideHiddenFiles} 
+                                  onChange={(e) => setHideHiddenFiles(e.target.checked)} 
+                                  style={{ cursor: 'pointer', margin: 0 }}
+                                />
+                                Hide Hidden
+                              </label>
                             </div>
                           </div>
 
@@ -847,7 +970,7 @@ export default function App() {
                               
                               /* RENDERING VIEW: LIST MODE */
                               viewMode === 'list' && (
-                                <ul style={{ listStyleType: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column' }}>
+                                <ul style={{ listStyleType: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', maxHeight: '420px', overflowY: 'auto' }}>
                                   {getProcessedFiles(mobileFiles, mobileSearch, mobileSort, mobileSortOrder).map((file: any) => (
                                     <li 
                                       key={file.path} 
@@ -884,20 +1007,15 @@ export default function App() {
                                         </div>
                                       </div>
                                       <div style={{ display: 'flex', gap: '0.35rem' }} onClick={(e) => e.stopPropagation()}>
-                                        <button 
-                                          className="btn btn-secondary btn-sm" 
-                                          style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
-                                          onClick={() => setSelectedFileInfo(file)}
-                                        >
-                                          Details
-                                        </button>
-                                        <button 
-                                          className="btn btn-danger btn-sm" 
-                                          style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem', background: 'var(--danger-container)', color: 'var(--danger)' }}
-                                          onClick={() => deleteMobileFile(file.path)}
-                                        >
-                                          Delete
-                                        </button>
+                                        {!file.is_dir && (
+                                          <button 
+                                            className="btn btn-primary btn-sm" 
+                                            style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
+                                            onClick={() => downloadMobileFile(file)}
+                                          >
+                                            Download
+                                          </button>
+                                        )}
                                       </div>
                                     </li>
                                   ))}
@@ -962,6 +1080,15 @@ export default function App() {
                                         <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
                                           {file.is_dir ? 'Folder' : `${(file.size / 1024).toFixed(0)} KB`}
                                         </div>
+                                        {!file.is_dir && (
+                                          <button 
+                                            className="btn btn-primary btn-sm" 
+                                            style={{ padding: '0.15rem 0.35rem', fontSize: '0.65rem', marginTop: '0.35rem', width: '100%' }}
+                                            onClick={(e) => { e.stopPropagation(); downloadMobileFile(file); }}
+                                          >
+                                            Download
+                                          </button>
+                                        )}
                                       </li>
                                     );
                                   })}
@@ -1012,6 +1139,15 @@ export default function App() {
                                       <span style={{ fontSize: '0.75rem', fontWeight: '500', flexGrow: 1, textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
                                         {file.name}
                                       </span>
+                                      {!file.is_dir && (
+                                        <button 
+                                          className="btn btn-primary btn-sm" 
+                                          style={{ padding: '0.15rem 0.35rem', fontSize: '0.65rem', flexShrink: 0 }}
+                                          onClick={(e) => { e.stopPropagation(); downloadMobileFile(file); }}
+                                        >
+                                          Download
+                                        </button>
+                                      )}
                                     </li>
                                   ))}
                                 </ul>
@@ -1030,6 +1166,234 @@ export default function App() {
                   </article>
 
                 </div>
+              </section>
+            )}
+
+            {activeTab === 'speaker' && (
+              <section style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', marginTop: '1rem', width: '100%' }} aria-label="Audio & Sound Sync">
+                <header>
+                  <h2 style={{ margin: 0 }}>Audio & Sound Sync</h2>
+                  <p style={{ color: 'var(--text-muted)', margin: '0.25rem 0 0 0', fontSize: '0.9rem' }}>
+                    Configure and control dynamic audio routing, playback redirection, and phone call synchronization.
+                  </p>
+                </header>
+
+                {/* 1. Overall Master ON/OFF Card */}
+                <div className="card" style={{ padding: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: '1.1rem' }}>Overall Audio Sync Master Control</h3>
+                    <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                      Enable or disable all system audio streaming and call gateway routing features completely.
+                    </p>
+                  </div>
+                  <button
+                    role="switch"
+                    aria-checked={audioSyncEnabled}
+                    onClick={() => setAudioSyncEnabled(!audioSyncEnabled)}
+                    className={`m3-switch ${audioSyncEnabled ? 'checked' : ''}`}
+                  >
+                    <span className="m3-switch-thumb"></span>
+                  </button>
+                </div>
+
+                {audioSyncEnabled ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                    
+                    {/* 2. Direction Selection Card */}
+                    <div className="card" style={{ padding: '1.5rem' }}>
+                      <h3 style={{ marginTop: 0, marginBottom: '1rem', fontSize: '1.1rem' }}>Select Audio Flow Direction</h3>
+                      
+                      <div style={{ display: 'flex', gap: '2rem' }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontWeight: '500' }}>
+                          <input 
+                            type="radio" 
+                            name="audio_direction" 
+                            checked={audioDirection === 'desktop_to_mobile'} 
+                            onChange={() => setAudioDirection('desktop_to_mobile')}
+                            style={{ accentColor: 'var(--accent)' }}
+                          />
+                          Desktop to Mobile (Use Mobile Phone as Laptop Speaker)
+                        </label>
+                        
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontWeight: '500' }}>
+                          <input 
+                            type="radio" 
+                            name="audio_direction" 
+                            checked={audioDirection === 'mobile_to_desktop'} 
+                            onChange={() => setAudioDirection('mobile_to_desktop')}
+                            style={{ accentColor: 'var(--accent)' }}
+                          />
+                          Mobile to Desktop (Use Laptop as Mobile Phone Speaker)
+                        </label>
+                      </div>
+                    </div>
+
+                    {/* 3. Direction-specific options and controls */}
+                    {audioDirection === 'desktop_to_mobile' ? (
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.5rem' }}>
+                        
+                        {/* Desktop to Mobile Options Card */}
+                        <div className="card" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                          <h3 style={{ margin: 0, fontSize: '1.1rem' }}>Playback Options</h3>
+                          
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginTop: '0.5rem' }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.9rem' }}>
+                              <input 
+                                type="radio" 
+                                name="desktop_playback_mode" 
+                                checked={desktopToMobilePlaybackMode === 'destination_only'} 
+                                onChange={() => {
+                                  setDesktopToMobilePlaybackMode('destination_only');
+                                  if (wifiSpeakerActive) {
+                                    showToast('Restart sync to apply playback mode changes');
+                                  }
+                                }}
+                                style={{ accentColor: 'var(--accent)' }}
+                              />
+                              Play on Destination Device Only (Mute laptop speakers)
+                            </label>
+                            
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.9rem' }}>
+                              <input 
+                                type="radio" 
+                                name="desktop_playback_mode" 
+                                checked={desktopToMobilePlaybackMode === 'both'} 
+                                onChange={() => {
+                                  setDesktopToMobilePlaybackMode('both');
+                                  if (wifiSpeakerActive) {
+                                    showToast('Restart sync to apply playback mode changes');
+                                  }
+                                }}
+                                style={{ accentColor: 'var(--accent)' }}
+                              />
+                              Play on Both Devices (Laptop & mobile speakers simultaneously)
+                            </label>
+                          </div>
+
+                          <div style={{ marginTop: '1.5rem', display: 'flex', justifyContent: 'center' }}>
+                            {status?.paired_devices.some(d => d.is_online) ? (
+                              <button 
+                                className={`m3-btn ${wifiSpeakerActive ? 'm3-btn-outlined' : 'm3-btn-filled'}`}
+                                onClick={toggleWifiSpeaker}
+                                disabled={startingSpeaker}
+                                style={{ padding: '0.75rem 2.5rem', fontSize: '1rem', minWidth: '180px', borderRadius: '50px' }}
+                              >
+                                {startingSpeaker ? 'Connecting...' : wifiSpeakerActive ? 'Stop Sync' : 'Start Sync'}
+                              </button>
+                            ) : (
+                              <div style={{ fontSize: '0.9rem', color: 'var(--danger)', fontStyle: 'italic', textAlign: 'center' }}>
+                                Connect your mobile device over Wi-Fi to start streaming.
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Stream telemetry card */}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                          <div className="card" style={{ padding: '1.5rem' }}>
+                            <h3 style={{ marginTop: 0, marginBottom: '1rem', fontSize: '1.1rem' }}>Stream Details & Status</h3>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.4rem' }}>
+                                <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Status</span>
+                                <span style={{ fontWeight: '600', fontSize: '0.9rem', color: wifiSpeakerActive ? 'var(--success)' : 'var(--text-muted)' }}>
+                                  {wifiSpeakerActive ? 'Streaming Active' : 'Ready'}
+                                </span>
+                              </div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.4rem' }}>
+                                <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Latency Profile</span>
+                                <span style={{ fontWeight: '500', fontSize: '0.9rem', color: 'var(--success)' }}>&lt; 5 ms (Low Latency)</span>
+                              </div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.4rem' }}>
+                                <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Target Device</span>
+                                <span style={{ fontWeight: '500', fontSize: '0.9rem' }}>{status?.paired_devices.filter(d => d.is_online)[0]?.device_name || 'None'}</span>
+                              </div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Format</span>
+                                <span style={{ fontWeight: '500', fontSize: '0.9rem' }}>Stereo 48.0 kHz 16-bit PCM</span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                      </div>
+                    ) : (
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.5rem' }}>
+                        
+                        {/* Mobile to Desktop Options Card */}
+                        <div className="card" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                          <h3 style={{ margin: 0, fontSize: '1.1rem' }}>Playback Options</h3>
+                          
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginTop: '0.5rem' }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.9rem' }}>
+                              <input 
+                                type="radio" 
+                                name="mobile_playback_mode" 
+                                checked={mobileToDesktopPlaybackMode === 'destination_only'} 
+                                onChange={() => setMobileToDesktopPlaybackMode('destination_only')}
+                                style={{ accentColor: 'var(--accent)' }}
+                              />
+                              Play on Destination Device Only (Laptop speakers only)
+                            </label>
+                            
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.9rem', opacity: 0.7 }}>
+                              <input 
+                                type="radio" 
+                                name="mobile_playback_mode" 
+                                checked={mobileToDesktopPlaybackMode === 'both'} 
+                                onChange={() => {
+                                  alert("Note: Routing calls to both phone and laptop simultaneously is not supported by Android OS to prevent feedback/echo loops. Media will play on laptop speakers.");
+                                  setMobileToDesktopPlaybackMode('both');
+                                }}
+                                style={{ accentColor: 'var(--accent)' }}
+                              />
+                              Play on Both Devices (Mobile phone & laptop speakers)
+                            </label>
+                          </div>
+                        </div>
+
+                        {/* Bluetooth Gateway Status Card */}
+                        <div className="card" style={{ padding: '1.5rem' }}>
+                          <h3 style={{ marginTop: 0, marginBottom: '1rem', fontSize: '1.1rem' }}>Bluetooth Call Routing Gateway</h3>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.4rem' }}>
+                              <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Gateway Connection</span>
+                              <span style={{ 
+                                fontWeight: '600', 
+                                fontSize: '0.9rem', 
+                                color: status?.paired_devices[0]?.is_bluetooth_connected ? 'var(--success)' : 'var(--danger)' 
+                              }}>
+                                {status?.paired_devices[0]?.is_bluetooth_connected ? 'Connected' : 'Disconnected'}
+                              </span>
+                            </div>
+
+                            <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.4rem' }}>
+                              <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Mobile Device</span>
+                              <span style={{ fontWeight: '500', fontSize: '0.9rem' }}>{status?.paired_devices[0]?.device_name || 'None'}</span>
+                            </div>
+                            
+                            <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.5rem', lineHeight: '1.4' }}>
+                              {status?.paired_devices[0]?.is_bluetooth_connected ? (
+                                <span>Phone call audio is actively synchronized. It will route to your laptop speakers and microphone when active.</span>
+                              ) : (
+                                <span>Gateway is offline. Ensure Bluetooth is enabled on your phone and both devices are paired.</span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                      </div>
+                    )}
+
+                  </div>
+                ) : (
+                  <div className="card" style={{ padding: '3rem 2rem', textAlign: 'center', backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}>
+                    <VolumeX size={48} style={{ color: 'var(--text-muted)', marginBottom: '1rem' }} />
+                    <h3 style={{ margin: 0, fontSize: '1.1rem', color: 'var(--text-muted)' }}>Audio Synchronization Disabled</h3>
+                    <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                      All audio sharing features are disabled. Switch on the Master Toggle above to configure stream flows.
+                    </p>
+                  </div>
+                )}
               </section>
             )}
 
