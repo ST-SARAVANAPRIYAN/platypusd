@@ -502,6 +502,9 @@ export default function App() {
             setAudioDirection(payload.data.audio_direction);
             setDesktopToMobilePlaybackMode(payload.data.playback_mode);
             setWifiSpeakerActive(payload.data.wifi_speaker_active);
+            if (payload.data.wifi_speaker_active) {
+              setAudioSyncEnabled(true);
+            }
           } else if (payload.event === 'ClipboardSynced') {
             setLastClipboard(payload.data.text);
           } else if (payload.event === 'WifiSpeakerStopped') {

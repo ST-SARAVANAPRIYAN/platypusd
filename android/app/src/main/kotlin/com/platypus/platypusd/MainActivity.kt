@@ -1117,6 +1117,11 @@ class MainActivity : ComponentActivity() {
                                     putExtra("CALLS_SYNC_ENABLED", false)
                                 }
                                 context.startService(serviceIntent)
+                                ConnectionService.instance?.updateAudioConfigOnDaemon(
+                                    "desktop_to_mobile",
+                                    audioPlaybackModeState.value,
+                                    isWifiActive
+                                )
                             },
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -1130,6 +1135,11 @@ class MainActivity : ComponentActivity() {
                                         putExtra("CALLS_SYNC_ENABLED", false)
                                     }
                                     context.startService(serviceIntent)
+                                    ConnectionService.instance?.updateAudioConfigOnDaemon(
+                                        "desktop_to_mobile",
+                                        audioPlaybackModeState.value,
+                                        isWifiActive
+                                    )
                                 }
                             )
                             Text("Desktop to Mobile (Phone as Speaker)", fontSize = 13.sp)
@@ -1144,6 +1154,11 @@ class MainActivity : ComponentActivity() {
                                     putExtra("CALLS_SYNC_ENABLED", true)
                                 }
                                 context.startService(serviceIntent)
+                                ConnectionService.instance?.updateAudioConfigOnDaemon(
+                                    "mobile_to_desktop",
+                                    audioPlaybackModeState.value,
+                                    false
+                                )
                             },
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -1157,6 +1172,11 @@ class MainActivity : ComponentActivity() {
                                         putExtra("CALLS_SYNC_ENABLED", true)
                                     }
                                     context.startService(serviceIntent)
+                                    ConnectionService.instance?.updateAudioConfigOnDaemon(
+                                        "mobile_to_desktop",
+                                        audioPlaybackModeState.value,
+                                        false
+                                    )
                                 }
                             )
                             Text("Mobile to Desktop (PC as Speaker/Mic)", fontSize = 13.sp)
@@ -1225,6 +1245,11 @@ class MainActivity : ComponentActivity() {
                                 Row(
                                     modifier = Modifier.fillMaxWidth().clickable {
                                         updateAudioConfig(audioDirection, "destination_only", isWifiActive)
+                                        ConnectionService.instance?.updateAudioConfigOnDaemon(
+                                            audioDirection,
+                                            "destination_only",
+                                            isWifiActive
+                                        )
                                     },
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
@@ -1232,6 +1257,11 @@ class MainActivity : ComponentActivity() {
                                         selected = audioPlaybackModeState.value == "destination_only",
                                         onClick = {
                                             updateAudioConfig(audioDirection, "destination_only", isWifiActive)
+                                            ConnectionService.instance?.updateAudioConfigOnDaemon(
+                                                audioDirection,
+                                                "destination_only",
+                                                isWifiActive
+                                            )
                                         }
                                     )
                                     Text("Play on Destination Device Only (Mute laptop)", fontSize = 12.sp)
@@ -1239,6 +1269,11 @@ class MainActivity : ComponentActivity() {
                                 Row(
                                     modifier = Modifier.fillMaxWidth().clickable {
                                         updateAudioConfig(audioDirection, "both", isWifiActive)
+                                        ConnectionService.instance?.updateAudioConfigOnDaemon(
+                                            audioDirection,
+                                            "both",
+                                            isWifiActive
+                                        )
                                     },
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
@@ -1246,6 +1281,11 @@ class MainActivity : ComponentActivity() {
                                         selected = audioPlaybackModeState.value == "both",
                                         onClick = {
                                             updateAudioConfig(audioDirection, "both", isWifiActive)
+                                            ConnectionService.instance?.updateAudioConfigOnDaemon(
+                                                audioDirection,
+                                                "both",
+                                                isWifiActive
+                                            )
                                         }
                                     )
                                     Text("Play on Both Devices simultaneously", fontSize = 12.sp)
@@ -1255,7 +1295,13 @@ class MainActivity : ComponentActivity() {
                             // Start / Stop button
                             Button(
                                 onClick = {
-                                    updateAudioConfig(audioDirection, audioPlaybackModeState.value, !isWifiActive)
+                                    val nextActive = !isWifiActive
+                                    updateAudioConfig(audioDirection, audioPlaybackModeState.value, nextActive)
+                                    ConnectionService.instance?.updateAudioConfigOnDaemon(
+                                        audioDirection,
+                                        audioPlaybackModeState.value,
+                                        nextActive
+                                    )
                                 },
                                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                                 colors = ButtonDefaults.buttonColors(
