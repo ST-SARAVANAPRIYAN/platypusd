@@ -739,33 +739,93 @@ class ConnectionService : Service() {
     /* ---------------- Clipboard Operations ---------------- */
     private var lastIncomingSyncTime = 0L
 
+    private val CLIPBOARD_CHANNEL_ID = "platypusd_clipboard"
+
+    private fun createClipboardNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CLIPBOARD_CHANNEL_ID,
+                "Clipboard Sync",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Shows heads-up notification to sync clipboard"
+            }
+            val manager = getSystemService(NotificationManager::class.java)
+            manager?.createNotificationChannel(channel)
+        }
+    }
+
+    private fun showClipboardSyncNotification() {
+        val syncIntent = Intent(this, ClipboardSyncActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        }
+        val syncPendingIntent = android.app.PendingIntent.getActivity(
+            this,
+            1,
+            syncIntent,
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+            } else {
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT
+            }
+        )
+
+        val builder = NotificationCompat.Builder(this, CLIPBOARD_CHANNEL_ID)
+            .setContentTitle("Sync Clipboard")
+            .setContentText("Copy detected. Tap to sync clipboard to PC.")
+            .setSmallIcon(android.R.drawable.ic_menu_share)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .setContentIntent(syncPendingIntent)
+            .setAutoCancel(true)
+
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.notify(2, builder.build())
+    }
+
     private fun setupClipboardListener() {
+        createClipboardNotificationChannel()
         clipboardManager.addPrimaryClipChangedListener {
-            val clipData = clipboardManager.primaryClip
-            if (clipData != null && clipData.itemCount > 0) {
-                val clipText = clipData.getItemAt(0).text?.toString() ?: ""
+            val sharedPrefs = getSharedPreferences("platypusd_prefs", Context.MODE_PRIVATE)
+            val direction = sharedPrefs.getString("clipboard_direction", "bidirectional")
+            val autoSync = sharedPrefs.getBoolean("clipboard_auto_sync", true)
+
+            if (!autoSync || (direction != "bidirectional" && direction != "mobile_to_desktop")) {
+                Log.i(TAG, "Local phone copy event ignored (direction: $direction, autoSync: $autoSync)")
+                return@addPrimaryClipChangedListener
+            }
+
+            var hasRead = false
+            var clipText = ""
+            try {
+                val clipData = clipboardManager.primaryClip
+                if (clipData != null && clipData.itemCount > 0) {
+                    clipText = clipData.getItemAt(0).text?.toString() ?: ""
+                    if (clipText.isNotEmpty()) {
+                        hasRead = true
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to read clipboard directly: ${e.message}")
+            }
+
+            if (hasRead) {
                 val trimmedText = clipText.trim()
                 val trimmedLast = lastSyncedClipboardText.trim()
-
                 if (trimmedText.isNotEmpty() && trimmedText != trimmedLast) {
                     val timePassed = System.currentTimeMillis() - lastIncomingSyncTime
                     if (timePassed < 1500) {
                         Log.d(TAG, "Ignoring local clipboard change due to recent incoming sync ($timePassed ms ago)")
                         return@addPrimaryClipChangedListener
                     }
-
-                    val sharedPrefs = getSharedPreferences("platypusd_prefs", Context.MODE_PRIVATE)
-                    val direction = sharedPrefs.getString("clipboard_direction", "bidirectional")
-                    val autoSync = sharedPrefs.getBoolean("clipboard_auto_sync", true)
-
-                    if (autoSync && (direction == "bidirectional" || direction == "mobile_to_desktop")) {
-                        Log.i(TAG, "Local phone copy event detected. Syncing clipboard to desktop.")
-                        lastSyncedClipboardText = clipText
-                        relayClipboardState(clipText)
-                    } else {
-                        Log.i(TAG, "Local phone copy event ignored (direction: $direction, autoSync: $autoSync)")
-                    }
+                    Log.i(TAG, "Local phone copy event detected (foreground). Syncing clipboard to desktop.")
+                    lastSyncedClipboardText = clipText
+                    relayClipboardState(clipText)
                 }
+            } else {
+                // Background copy event detected but blocked. Prompt user to sync!
+                Log.i(TAG, "Background copy event detected. Showing sync notification.")
+                showClipboardSyncNotification()
             }
         }
     }
@@ -1066,10 +1126,25 @@ class ConnectionService : Service() {
     }
 
     private fun getNotification(text: String): Notification {
+        val syncIntent = Intent(this, ClipboardSyncActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        }
+        val syncPendingIntent = android.app.PendingIntent.getActivity(
+            this,
+            0,
+            syncIntent,
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+            } else {
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT
+            }
+        )
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("platypusd platform sync")
             .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_menu_share)
+            .addAction(android.R.drawable.ic_menu_share, "Sync Clipboard", syncPendingIntent)
             .build()
     }
     fun isBluetoothDeviceConnected(address: String): Boolean {
