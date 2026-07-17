@@ -17,6 +17,7 @@ class ClipboardSyncActivity : Activity() {
                 val clipText = clipData.getItemAt(0).text?.toString() ?: ""
                 val trimmedText = clipText.trim()
                 if (trimmedText.isNotEmpty()) {
+                    ConnectionService.instance?.lastSyncedClipboardText = clipText
                     ConnectionService.instance?.relayClipboardState(clipText)
                     Toast.makeText(this, "Clipboard synced to PC!", Toast.LENGTH_SHORT).show()
                 } else {

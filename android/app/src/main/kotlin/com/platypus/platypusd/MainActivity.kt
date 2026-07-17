@@ -82,6 +82,13 @@ class MainActivity : ComponentActivity() {
     private val clipboardAutoSyncState = mutableStateOf(true)
     private val clipboardDirectionState = mutableStateOf("bidirectional")
     private val isStoragePermissionGrantedState = mutableStateOf(true)
+    var isActivityInForeground = false
+
+    // Audio Settings State
+    val audioSyncEnabledState = mutableStateOf(true)
+    val audioDirectionState = mutableStateOf("desktop_to_mobile")
+    val audioPlaybackModeState = mutableStateOf("destination_only")
+    val wifiSpeakerActiveState = mutableStateOf(false)
 
     // Files State
     private val currentPcPathState = mutableStateOf("")
@@ -160,6 +167,11 @@ class MainActivity : ComponentActivity() {
         selectedBtMacState.value = sharedPrefs.getString("selected_bluetooth_mac", null)
         themePaletteState.value = sharedPrefs.getString("theme_palette", "auto") ?: "auto"
 
+        audioSyncEnabledState.value = sharedPrefs.getBoolean("audio_sync_enabled", true)
+        audioDirectionState.value = sharedPrefs.getString("audio_direction", "desktop_to_mobile") ?: "desktop_to_mobile"
+        audioPlaybackModeState.value = sharedPrefs.getString("audio_playback_mode", "destination_only") ?: "destination_only"
+        wifiSpeakerActiveState.value = sharedPrefs.getBoolean("wifi_speaker_active", false)
+
         startIntegrationService()
         checkPermissions()
 
@@ -174,6 +186,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        isActivityInForeground = true
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             isStoragePermissionGrantedState.value = android.os.Environment.isExternalStorageManager()
         } else {
@@ -185,6 +198,12 @@ class MainActivity : ComponentActivity() {
         if (currentTabState.value == "files") {
             fetchPcFiles(currentPcPathState.value)
         }
+        ConnectionService.instance?.syncClipboardIfChanged()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        isActivityInForeground = false
     }
 
     override fun onDestroy() {
@@ -200,6 +219,33 @@ class MainActivity : ComponentActivity() {
             val sharedPrefs = getSharedPreferences("platypusd_prefs", Context.MODE_PRIVATE)
             clipboardAutoSyncState.value = sharedPrefs.getBoolean("clipboard_auto_sync", true)
             clipboardDirectionState.value = sharedPrefs.getString("clipboard_direction", "bidirectional") ?: "bidirectional"
+        }
+    }
+
+    fun refreshAudioUi() {
+        runOnUiThread {
+            val sharedPrefs = getSharedPreferences("platypusd_prefs", Context.MODE_PRIVATE)
+            audioSyncEnabledState.value = sharedPrefs.getBoolean("audio_sync_enabled", true)
+            audioDirectionState.value = sharedPrefs.getString("audio_direction", "desktop_to_mobile") ?: "desktop_to_mobile"
+            audioPlaybackModeState.value = sharedPrefs.getString("audio_playback_mode", "destination_only") ?: "destination_only"
+            wifiSpeakerActiveState.value = sharedPrefs.getBoolean("wifi_speaker_active", false)
+        }
+    }
+
+    fun updateAudioConfig(direction: String, mode: String, active: Boolean) {
+        runOnUiThread {
+            audioDirectionState.value = direction
+            audioPlaybackModeState.value = mode
+            wifiSpeakerActiveState.value = active
+            
+            val sharedPrefs = getSharedPreferences("platypusd_prefs", Context.MODE_PRIVATE)
+            sharedPrefs.edit()
+                .putString("audio_direction", direction)
+                .putString("audio_playback_mode", mode)
+                .putBoolean("wifi_speaker_active", active)
+                .apply()
+            
+            ConnectionService.instance?.updateAudioConfigOnDaemon(direction, mode, active)
         }
     }
 
@@ -985,13 +1031,9 @@ class MainActivity : ComponentActivity() {
         val isBtEnabled = btAdapter != null && btAdapter.isEnabled
         
         // Audio states
-        var audioSyncEnabled by remember {
-            mutableStateOf(sharedPrefs.getBoolean("audio_sync_enabled", true))
-        }
-        var audioDirection by remember {
-            mutableStateOf(sharedPrefs.getString("audio_direction", "desktop_to_mobile") ?: "desktop_to_mobile")
-        }
-        val isWifiActive = ConnectionService.instance?.isUdpAudioActive ?: false
+        val audioSyncEnabled = audioSyncEnabledState.value
+        val audioDirection = audioDirectionState.value
+        val isWifiActive = wifiSpeakerActiveState.value
         
         Column(
             modifier = Modifier
@@ -1027,10 +1069,9 @@ class MainActivity : ComponentActivity() {
                     Switch(
                         checked = audioSyncEnabled,
                         onCheckedChange = { checked ->
-                            audioSyncEnabled = checked
+                            audioSyncEnabledState.value = checked
                             sharedPrefs.edit().putBoolean("audio_sync_enabled", checked).apply()
                             
-                            // If disabled, also disable call sync service execution
                             val callsActive = checked && audioDirection == "mobile_to_desktop"
                             sharedPrefs.edit().putBoolean("calls_sync_enabled", callsActive).apply()
                             val serviceIntent = Intent(context, ConnectionService::class.java).apply {
@@ -1038,6 +1079,16 @@ class MainActivity : ComponentActivity() {
                                 putExtra("CALLS_SYNC_ENABLED", callsActive)
                             }
                             context.startService(serviceIntent)
+
+                            if (!checked && isWifiActive) {
+                                updateAudioConfig(audioDirection, audioPlaybackModeState.value, false)
+                            } else {
+                                ConnectionService.instance?.updateAudioConfigOnDaemon(
+                                    audioDirection,
+                                    audioPlaybackModeState.value,
+                                    isWifiActive
+                                )
+                            }
                         }
                     )
                 }
@@ -1059,8 +1110,7 @@ class MainActivity : ComponentActivity() {
                         
                         Row(
                             modifier = Modifier.fillMaxWidth().clickable {
-                                audioDirection = "desktop_to_mobile"
-                                sharedPrefs.edit().putString("audio_direction", "desktop_to_mobile").apply()
+                                updateAudioConfig("desktop_to_mobile", audioPlaybackModeState.value, isWifiActive)
                                 sharedPrefs.edit().putBoolean("calls_sync_enabled", false).apply()
                                 val serviceIntent = Intent(context, ConnectionService::class.java).apply {
                                     putExtra("UPDATE_CALLS_SYNC", true)
@@ -1073,8 +1123,7 @@ class MainActivity : ComponentActivity() {
                             RadioButton(
                                 selected = audioDirection == "desktop_to_mobile",
                                 onClick = {
-                                    audioDirection = "desktop_to_mobile"
-                                    sharedPrefs.edit().putString("audio_direction", "desktop_to_mobile").apply()
+                                    updateAudioConfig("desktop_to_mobile", audioPlaybackModeState.value, isWifiActive)
                                     sharedPrefs.edit().putBoolean("calls_sync_enabled", false).apply()
                                     val serviceIntent = Intent(context, ConnectionService::class.java).apply {
                                         putExtra("UPDATE_CALLS_SYNC", true)
@@ -1088,8 +1137,7 @@ class MainActivity : ComponentActivity() {
 
                         Row(
                             modifier = Modifier.fillMaxWidth().clickable {
-                                audioDirection = "mobile_to_desktop"
-                                sharedPrefs.edit().putString("audio_direction", "mobile_to_desktop").apply()
+                                updateAudioConfig("mobile_to_desktop", audioPlaybackModeState.value, false)
                                 sharedPrefs.edit().putBoolean("calls_sync_enabled", true).apply()
                                 val serviceIntent = Intent(context, ConnectionService::class.java).apply {
                                     putExtra("UPDATE_CALLS_SYNC", true)
@@ -1102,8 +1150,7 @@ class MainActivity : ComponentActivity() {
                             RadioButton(
                                 selected = audioDirection == "mobile_to_desktop",
                                 onClick = {
-                                    audioDirection = "mobile_to_desktop"
-                                    sharedPrefs.edit().putString("audio_direction", "mobile_to_desktop").apply()
+                                    updateAudioConfig("mobile_to_desktop", audioPlaybackModeState.value, false)
                                     sharedPrefs.edit().putBoolean("calls_sync_enabled", true).apply()
                                     val serviceIntent = Intent(context, ConnectionService::class.java).apply {
                                         putExtra("UPDATE_CALLS_SYNC", true)
@@ -1168,6 +1215,54 @@ class MainActivity : ComponentActivity() {
                                     Text("Port:", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     Text("UDP Port 9095", fontSize = 12.sp, fontWeight = FontWeight.Medium)
                                 }
+                            }
+
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                            // Playback Mode selection
+                            Text("Playback Options", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().clickable {
+                                        updateAudioConfig(audioDirection, "destination_only", isWifiActive)
+                                    },
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    RadioButton(
+                                        selected = audioPlaybackModeState.value == "destination_only",
+                                        onClick = {
+                                            updateAudioConfig(audioDirection, "destination_only", isWifiActive)
+                                        }
+                                    )
+                                    Text("Play on Destination Device Only (Mute laptop)", fontSize = 12.sp)
+                                }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().clickable {
+                                        updateAudioConfig(audioDirection, "both", isWifiActive)
+                                    },
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    RadioButton(
+                                        selected = audioPlaybackModeState.value == "both",
+                                        onClick = {
+                                            updateAudioConfig(audioDirection, "both", isWifiActive)
+                                        }
+                                    )
+                                    Text("Play on Both Devices simultaneously", fontSize = 12.sp)
+                                }
+                            }
+
+                            // Start / Stop button
+                            Button(
+                                onClick = {
+                                    updateAudioConfig(audioDirection, audioPlaybackModeState.value, !isWifiActive)
+                                },
+                                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (isWifiActive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                                )
+                            ) {
+                                Text(if (isWifiActive) "Stop Sync" else "Start Sync")
                             }
                         }
                     }

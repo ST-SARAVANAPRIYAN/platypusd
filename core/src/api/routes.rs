@@ -19,6 +19,7 @@ pub struct StatusResponse {
     pub active_call: Option<ActiveCall>,
     pub wifi_speaker_active: bool,
     pub call_gateway_enabled: bool,
+    pub audio_config: crate::services::wifi_speaker::AudioConfig,
 }
 
 #[derive(Serialize)]
@@ -55,6 +56,7 @@ pub async fn get_status(State(state): State<AppState>) -> Json<StatusResponse> {
         .collect();
 
     let active_call = state.call_service.get_active_call().await;
+    let audio_config = state.wifi_speaker_service.config.lock().await.clone();
 
     Json(StatusResponse {
         status: "online".to_string(),
@@ -66,6 +68,7 @@ pub async fn get_status(State(state): State<AppState>) -> Json<StatusResponse> {
         active_call,
         wifi_speaker_active: state.wifi_speaker_service.is_active(),
         call_gateway_enabled: state.call_service.is_gateway_enabled().await,
+        audio_config,
     })
 }
 
@@ -556,8 +559,20 @@ pub async fn speaker_start(
         }
     };
     
-    match state.wifi_speaker_service.start(target_ip, payload.playback_mode).await {
+    match state.wifi_speaker_service.start(target_ip, payload.playback_mode.clone()).await {
         Ok(_) => {
+            {
+                let mut cfg = state.wifi_speaker_service.config.lock().await;
+                cfg.wifi_speaker_active = true;
+                if let Some(ref pm) = payload.playback_mode {
+                    cfg.playback_mode = pm.clone();
+                }
+            }
+            let final_cfg = state.wifi_speaker_service.config.lock().await.clone();
+            let _ = state.tx.send(WsMessage {
+                event: "AudioConfigChanged".to_string(),
+                data: serde_json::to_value(&final_cfg).unwrap_or_default(),
+            });
             (StatusCode::OK, Json(serde_json::json!({ "success": true })))
         }
         Err(e) => {
@@ -576,6 +591,15 @@ pub async fn speaker_stop(
     
     match state.wifi_speaker_service.stop().await {
         Ok(_) => {
+            {
+                let mut cfg = state.wifi_speaker_service.config.lock().await;
+                cfg.wifi_speaker_active = false;
+            }
+            let final_cfg = state.wifi_speaker_service.config.lock().await.clone();
+            let _ = state.tx.send(WsMessage {
+                event: "AudioConfigChanged".to_string(),
+                data: serde_json::to_value(&final_cfg).unwrap_or_default(),
+            });
             (StatusCode::OK, Json(serde_json::json!({ "success": true })))
         }
         Err(e) => {
@@ -585,6 +609,72 @@ pub async fn speaker_stop(
             })))
         }
     }
+}
+
+pub async fn get_audio_config(
+    State(state): State<AppState>,
+) -> Json<crate::services::wifi_speaker::AudioConfig> {
+    let cfg = state.wifi_speaker_service.config.lock().await.clone();
+    Json(cfg)
+}
+
+pub async fn set_audio_config(
+    State(state): State<AppState>,
+    Json(payload): Json<crate::services::wifi_speaker::AudioConfig>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let mut cfg = state.wifi_speaker_service.config.lock().await;
+    let old_active = cfg.wifi_speaker_active;
+    let old_mode = cfg.playback_mode.clone();
+    let old_dir = cfg.audio_direction.clone();
+    
+    cfg.audio_direction = payload.audio_direction.clone();
+    cfg.playback_mode = payload.playback_mode.clone();
+    cfg.wifi_speaker_active = payload.wifi_speaker_active;
+    
+    info!("Updated audio configuration: direction={}, mode={}, active={}", cfg.audio_direction, cfg.playback_mode, cfg.wifi_speaker_active);
+
+    let mut start_speaker = false;
+    let mut stop_speaker = false;
+
+    if cfg.wifi_speaker_active {
+        if cfg.audio_direction == "mobile_to_desktop" {
+            stop_speaker = true;
+            cfg.wifi_speaker_active = false;
+        } else if !old_active || old_mode != cfg.playback_mode || old_dir != cfg.audio_direction {
+            if old_active {
+                stop_speaker = true;
+            }
+            start_speaker = true;
+        }
+    } else if old_active {
+        stop_speaker = true;
+    }
+
+    let cfg_clone = cfg.clone();
+    drop(cfg);
+
+    if stop_speaker {
+        let _ = state.wifi_speaker_service.stop().await;
+    }
+
+    if start_speaker {
+        let ips = state.device_ips.lock().await;
+        if let Some(target_ip) = ips.values().next() {
+            let _ = state.wifi_speaker_service.start(target_ip.clone(), Some(cfg_clone.playback_mode.clone())).await;
+        } else {
+            warn!("No connected devices found to stream audio to.");
+            let mut cfg = state.wifi_speaker_service.config.lock().await;
+            cfg.wifi_speaker_active = false;
+        }
+    }
+
+    let final_cfg = state.wifi_speaker_service.config.lock().await.clone();
+    let _ = state.tx.send(WsMessage {
+        event: "AudioConfigChanged".to_string(),
+        data: serde_json::to_value(&final_cfg).unwrap_or_default(),
+    });
+
+    (StatusCode::OK, Json(serde_json::json!({ "success": true })))
 }
 
 #[derive(Deserialize)]

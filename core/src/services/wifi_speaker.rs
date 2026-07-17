@@ -6,12 +6,22 @@ use std::process::Stdio;
 use tokio::io::AsyncReadExt;
 use tokio::net::UdpSocket;
 use tracing::{info, warn, error};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AudioConfig {
+    pub audio_direction: String, // "desktop_to_mobile" or "mobile_to_desktop"
+    pub playback_mode: String,  // "destination_only" or "both"
+    pub wifi_speaker_active: bool,
+}
 
 pub struct WifiSpeakerService {
     is_active: Arc<AtomicBool>,
     parec_child_killer: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
     module_id: Arc<Mutex<Option<String>>>,
     loopback_module_id: Arc<Mutex<Option<String>>>,
+    original_default_sink: Arc<Mutex<Option<String>>>,
+    pub config: Arc<Mutex<AudioConfig>>,
 }
 
 impl WifiSpeakerService {
@@ -21,6 +31,12 @@ impl WifiSpeakerService {
             parec_child_killer: Arc::new(Mutex::new(None)),
             module_id: Arc::new(Mutex::new(None)),
             loopback_module_id: Arc::new(Mutex::new(None)),
+            original_default_sink: Arc::new(Mutex::new(None)),
+            config: Arc::new(Mutex::new(AudioConfig {
+                audio_direction: "desktop_to_mobile".to_string(),
+                playback_mode: "destination_only".to_string(),
+                wifi_speaker_active: false,
+            })),
         }
     }
 
@@ -35,6 +51,41 @@ impl WifiSpeakerService {
         }
 
         info!("Starting Wi-Fi Speaker Service to target IP: {} with playback mode: {:?}", target_ip, playback_mode);
+
+        let mode = playback_mode.unwrap_or_else(|| "destination_only".to_string());
+
+        // Try to fetch original default audio sink, filtering out wifi_speaker
+        let mut original_sink = None;
+        if let Ok(out) = Command::new("pactl").arg("get-default-sink").output().await {
+            if out.status.success() {
+                let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if name != "wifi_speaker" {
+                    original_sink = Some(name);
+                }
+            }
+        }
+
+        // If no default sink (or it was wifi_speaker), find first hardware sink
+        if original_sink.is_none() {
+            if let Ok(out) = Command::new("pactl").args(&["list", "short", "sinks"]).output().await {
+                if out.status.success() {
+                    let stdout_str = String::from_utf8_lossy(&out.stdout);
+                    for line in stdout_str.lines() {
+                        let mut parts = line.split_whitespace();
+                        let _id = parts.next();
+                        if let Some(name) = parts.next() {
+                            if name != "wifi_speaker" {
+                                original_sink = Some(name.to_string());
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let base_sink = original_sink.clone().unwrap_or_else(|| "alsa_output.pci-0000_00_1f.3.analog-stereo".to_string());
+        info!("Determined default hardware audio sink: {}", base_sink);
 
         // 1. Load module-null-sink if not already loaded
         let mod_id = match Command::new("pactl")
@@ -62,12 +113,40 @@ impl WifiSpeakerService {
             *self.module_id.lock().await = Some(id.clone());
         }
 
-        // If playback_mode is "both", load module-loopback to duplicate sound
-        let mode = playback_mode.unwrap_or_else(|| "destination_only".to_string());
+        // Store original hardware sink to restore on stop
+        *self.original_default_sink.lock().await = Some(base_sink.clone());
+
+        // Always redirect default output to wifi_speaker
+        info!("Setting default audio sink to wifi_speaker...");
+        let _ = Command::new("pactl")
+            .args(&["set-default-sink", "wifi_speaker"])
+            .output()
+            .await;
+
+        // Move all active sink-inputs to wifi_speaker so currently playing sound is routed
+        if let Ok(out) = Command::new("pactl").args(&["list", "short", "sink-inputs"]).output().await {
+            if out.status.success() {
+                let stdout_str = String::from_utf8_lossy(&out.stdout);
+                for line in stdout_str.lines() {
+                    let mut parts = line.split_whitespace();
+                    if let Some(id_str) = parts.next() {
+                        if let Ok(id) = id_str.parse::<u32>() {
+                            info!("Moving active stream {} to wifi_speaker...", id);
+                            let _ = Command::new("pactl")
+                                .args(&["move-sink-input", &id.to_string(), "wifi_speaker"])
+                                .output()
+                                .await;
+                        }
+                    }
+                }
+            }
+        }
+
+        // If playing on both devices, loop back wifi_speaker monitor to the hardware speakers
         if mode == "both" {
-            info!("Dual playback mode: loading module-loopback from @DEFAULT_MONITOR@ to wifi_speaker...");
+            info!("Dual playback mode: looping back wifi_speaker.monitor to hardware sink {}...", base_sink);
             match Command::new("pactl")
-                .args(&["load-module", "module-loopback", "source=@DEFAULT_MONITOR@", "sink=wifi_speaker"])
+                .args(&["load-module", "module-loopback", "source=wifi_speaker.monitor", &format!("sink={}", base_sink), "latency_msec=10"])
                 .output()
                 .await
             {
@@ -98,6 +177,7 @@ impl WifiSpeakerService {
                     "--format=s16le",
                     "--rate=48000",
                     "--channels=2",
+                    "--latency-msec=10",
                 ])
                 .stdout(Stdio::piped())
                 .spawn()
@@ -167,6 +247,37 @@ impl WifiSpeakerService {
         // 1. Stop parec process
         if let Some(killer) = self.parec_child_killer.lock().await.take() {
             let _ = killer.send(());
+        }
+
+        // Restore original default sink
+        let mut orig_sink = self.original_default_sink.lock().await;
+        if let Some(ref sink) = *orig_sink {
+            info!("Restoring original default audio sink: {}", sink);
+            let _ = Command::new("pactl")
+                .args(&["set-default-sink", sink])
+                .output()
+                .await;
+
+            // Move all active sink-inputs back to original sink
+            if let Ok(out) = Command::new("pactl").args(&["list", "short", "sink-inputs"]).output().await {
+                if out.status.success() {
+                    let stdout_str = String::from_utf8_lossy(&out.stdout);
+                    for line in stdout_str.lines() {
+                        let mut parts = line.split_whitespace();
+                        if let Some(id_str) = parts.next() {
+                            if let Ok(id) = id_str.parse::<u32>() {
+                                info!("Moving active stream {} back to original default sink {}...", id, sink);
+                                let _ = Command::new("pactl")
+                                    .args(&["move-sink-input", &id.to_string(), sink])
+                                    .output()
+                                    .await;
+                            }
+                        }
+                    }
+                }
+            }
+
+            *orig_sink = None;
         }
 
         // 2. Unload loopback module if loaded

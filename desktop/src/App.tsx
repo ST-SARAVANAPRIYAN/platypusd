@@ -28,6 +28,11 @@ interface StatusData {
   active_call: ActiveCall | null;
   wifi_speaker_active: boolean;
   call_gateway_enabled: boolean;
+  audio_config: {
+    audio_direction: 'desktop_to_mobile' | 'mobile_to_desktop';
+    playback_mode: 'destination_only' | 'both';
+    wifi_speaker_active: boolean;
+  };
 }
 
 export default function App() {
@@ -275,14 +280,20 @@ export default function App() {
       const data: StatusData = await res.json();
       setStatus(data);
       setIsDaemonOnline(true);
-      setWifiSpeakerActive(data.wifi_speaker_active);
-      
-      if (data.call_gateway_enabled) {
-        setAudioSyncEnabled(true);
-        setAudioDirection('mobile_to_desktop');
-      } else if (data.wifi_speaker_active) {
-        setAudioSyncEnabled(true);
-        setAudioDirection('desktop_to_mobile');
+      if (data.audio_config) {
+        setAudioDirection(data.audio_config.audio_direction);
+        setDesktopToMobilePlaybackMode(data.audio_config.playback_mode);
+        setWifiSpeakerActive(data.audio_config.wifi_speaker_active);
+        setAudioSyncEnabled(data.audio_config.wifi_speaker_active || data.call_gateway_enabled);
+      } else {
+        setWifiSpeakerActive(data.wifi_speaker_active);
+        if (data.call_gateway_enabled) {
+          setAudioSyncEnabled(true);
+          setAudioDirection('mobile_to_desktop');
+        } else if (data.wifi_speaker_active) {
+          setAudioSyncEnabled(true);
+          setAudioDirection('desktop_to_mobile');
+        }
       }
       if (data.active_call) {
         setActiveCall(data.active_call);
@@ -291,7 +302,36 @@ export default function App() {
     } catch (err: any) {
       setError(err.message || 'Could not connect to platypusd daemon');
       setStatus(null);
-      setIsDaemonOnline(false);
+    }
+  };
+
+  const updateAudioConfig = async (newConfig: {
+    audio_direction?: 'desktop_to_mobile' | 'mobile_to_desktop';
+    playback_mode?: 'destination_only' | 'both';
+    wifi_speaker_active?: boolean;
+  }) => {
+    try {
+      const currentDir = newConfig.audio_direction !== undefined ? newConfig.audio_direction : audioDirection;
+      const currentMode = newConfig.playback_mode !== undefined ? newConfig.playback_mode : desktopToMobilePlaybackMode;
+      const currentActive = newConfig.wifi_speaker_active !== undefined ? newConfig.wifi_speaker_active : wifiSpeakerActive;
+
+      const res = await fetch('http://localhost:8080/api/v1/audio/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          audio_direction: currentDir,
+          playback_mode: currentMode,
+          wifi_speaker_active: currentActive
+        })
+      });
+      if (!res.ok) throw new Error('Failed to update audio configuration');
+      
+      if (newConfig.audio_direction !== undefined) setAudioDirection(newConfig.audio_direction);
+      if (newConfig.playback_mode !== undefined) setDesktopToMobilePlaybackMode(newConfig.playback_mode);
+      if (newConfig.wifi_speaker_active !== undefined) setWifiSpeakerActive(newConfig.wifi_speaker_active);
+    } catch (err: any) {
+      console.error(err);
+      showToast(`Error updating config: ${err.message}`);
     }
   };
 
@@ -458,6 +498,10 @@ export default function App() {
           } else if (payload.event === 'ClipboardConfigChanged') {
             setClipDirection(payload.data.direction);
             setClipAutoSync(payload.data.auto_sync);
+          } else if (payload.event === 'AudioConfigChanged') {
+            setAudioDirection(payload.data.audio_direction);
+            setDesktopToMobilePlaybackMode(payload.data.playback_mode);
+            setWifiSpeakerActive(payload.data.wifi_speaker_active);
           } else if (payload.event === 'ClipboardSynced') {
             setLastClipboard(payload.data.text);
           } else if (payload.event === 'WifiSpeakerStopped') {
@@ -1189,7 +1233,13 @@ export default function App() {
                   <button
                     role="switch"
                     aria-checked={audioSyncEnabled}
-                    onClick={() => setAudioSyncEnabled(!audioSyncEnabled)}
+                    onClick={() => {
+                      const newEnabled = !audioSyncEnabled;
+                      setAudioSyncEnabled(newEnabled);
+                      if (!newEnabled && wifiSpeakerActive) {
+                        updateAudioConfig({ wifi_speaker_active: false });
+                      }
+                    }}
                     className={`m3-switch ${audioSyncEnabled ? 'checked' : ''}`}
                   >
                     <span className="m3-switch-thumb"></span>
@@ -1209,7 +1259,7 @@ export default function App() {
                             type="radio" 
                             name="audio_direction" 
                             checked={audioDirection === 'desktop_to_mobile'} 
-                            onChange={() => setAudioDirection('desktop_to_mobile')}
+                            onChange={() => updateAudioConfig({ audio_direction: 'desktop_to_mobile' })}
                             style={{ accentColor: 'var(--accent)' }}
                           />
                           Desktop to Mobile (Use Mobile Phone as Laptop Speaker)
@@ -1220,7 +1270,7 @@ export default function App() {
                             type="radio" 
                             name="audio_direction" 
                             checked={audioDirection === 'mobile_to_desktop'} 
-                            onChange={() => setAudioDirection('mobile_to_desktop')}
+                            onChange={() => updateAudioConfig({ audio_direction: 'mobile_to_desktop', wifi_speaker_active: false })}
                             style={{ accentColor: 'var(--accent)' }}
                           />
                           Mobile to Desktop (Use Laptop as Mobile Phone Speaker)
@@ -1242,12 +1292,7 @@ export default function App() {
                                 type="radio" 
                                 name="desktop_playback_mode" 
                                 checked={desktopToMobilePlaybackMode === 'destination_only'} 
-                                onChange={() => {
-                                  setDesktopToMobilePlaybackMode('destination_only');
-                                  if (wifiSpeakerActive) {
-                                    showToast('Restart sync to apply playback mode changes');
-                                  }
-                                }}
+                                onChange={() => updateAudioConfig({ playback_mode: 'destination_only' })}
                                 style={{ accentColor: 'var(--accent)' }}
                               />
                               Play on Destination Device Only (Mute laptop speakers)
@@ -1258,12 +1303,7 @@ export default function App() {
                                 type="radio" 
                                 name="desktop_playback_mode" 
                                 checked={desktopToMobilePlaybackMode === 'both'} 
-                                onChange={() => {
-                                  setDesktopToMobilePlaybackMode('both');
-                                  if (wifiSpeakerActive) {
-                                    showToast('Restart sync to apply playback mode changes');
-                                  }
-                                }}
+                                onChange={() => updateAudioConfig({ playback_mode: 'both' })}
                                 style={{ accentColor: 'var(--accent)' }}
                               />
                               Play on Both Devices (Laptop & mobile speakers simultaneously)

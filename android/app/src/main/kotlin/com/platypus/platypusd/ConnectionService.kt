@@ -174,7 +174,6 @@ class ConnectionService : Service() {
         registerReceiver(bluetoothReceiver, filter)
 
         Log.i(TAG, "ConnectionService initialized.")
-        startUdpAudioReceiver()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -258,7 +257,26 @@ class ConnectionService : Service() {
                     android.media.AudioFormat.ENCODING_PCM_16BIT
                 )
                 
-                audioTrack = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                audioTrack = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    android.media.AudioTrack.Builder()
+                        .setAudioAttributes(
+                            android.media.AudioAttributes.Builder()
+                                .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC)
+                                .build()
+                        )
+                        .setAudioFormat(
+                            android.media.AudioFormat.Builder()
+                                .setEncoding(android.media.AudioFormat.ENCODING_PCM_16BIT)
+                                .setSampleRate(48000)
+                                .setChannelMask(android.media.AudioFormat.CHANNEL_OUT_STEREO)
+                                .build()
+                        )
+                        .setBufferSizeInBytes(Math.max(minBuf, 4800))
+                        .setTransferMode(android.media.AudioTrack.MODE_STREAM)
+                        .setPerformanceMode(android.media.AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+                        .build()
+                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                     android.media.AudioTrack(
                         android.media.AudioAttributes.Builder()
                             .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
@@ -269,7 +287,7 @@ class ConnectionService : Service() {
                             .setSampleRate(48000)
                             .setChannelMask(android.media.AudioFormat.CHANNEL_OUT_STEREO)
                             .build(),
-                        Math.max(minBuf, 9600),
+                        Math.max(minBuf, 4800),
                         android.media.AudioTrack.MODE_STREAM,
                         AudioManager.AUDIO_SESSION_ID_GENERATE
                     )
@@ -280,13 +298,14 @@ class ConnectionService : Service() {
                         48000,
                         android.media.AudioFormat.CHANNEL_OUT_STEREO,
                         android.media.AudioFormat.ENCODING_PCM_16BIT,
-                        Math.max(minBuf, 9600),
+                        Math.max(minBuf, 4800),
                         android.media.AudioTrack.MODE_STREAM
                     )
                 }
 
                 while (isUdpAudioActive) {
                     try {
+                        packet.length = buffer.size
                         socket.receive(packet)
                         
                         if (audioTrack.state == android.media.AudioTrack.STATE_INITIALIZED && audioTrack.playState != android.media.AudioTrack.PLAYSTATE_PLAYING) {
@@ -485,6 +504,7 @@ class ConnectionService : Service() {
                 Log.i(TAG, "WebSocket event connection opened to: $wsUrl")
                 isBluetoothConnectedCached = null // force update
                 getClipboardConfigFromDaemon()
+                getAudioConfigFromDaemon()
                 scope.launch {
                     while (isWsConnected) {
                         checkBluetoothConnectionToHost()
@@ -534,6 +554,28 @@ class ConnectionService : Service() {
                             Log.i(TAG, "Received call action command: $action")
                             scope.launch(Dispatchers.Main) {
                                 handleCallActionCommand(action)
+                            }
+                        } else if (event == "AudioConfigChanged") {
+                            val direction = data.optString("audio_direction", "desktop_to_mobile")
+                            val mode = data.optString("playback_mode", "destination_only")
+                            val active = data.optBoolean("wifi_speaker_active", false)
+                            Log.i(TAG, "Received audio config change: direction=$direction, mode=$mode, active=$active")
+
+                            val sharedPrefs = getSharedPreferences("platypusd_prefs", Context.MODE_PRIVATE)
+                            sharedPrefs.edit()
+                                .putString("audio_direction", direction)
+                                .putString("audio_playback_mode", mode)
+                                .putBoolean("wifi_speaker_active", active)
+                                .apply()
+
+                            scope.launch(Dispatchers.Main) {
+                                MainActivity.instance?.refreshAudioUi()
+                            }
+
+                            if (active && direction == "desktop_to_mobile") {
+                                startUdpAudioReceiver()
+                            } else {
+                                stopUdpAudioReceiver()
                             }
                         }
                     }
@@ -785,13 +827,16 @@ class ConnectionService : Service() {
 
     private fun setupClipboardListener() {
         createClipboardNotificationChannel()
+        Log.i(TAG, "Registering primary clip changed listener...")
         clipboardManager.addPrimaryClipChangedListener {
+            Log.i(TAG, "onPrimaryClipChanged callback fired!")
             val sharedPrefs = getSharedPreferences("platypusd_prefs", Context.MODE_PRIVATE)
             val direction = sharedPrefs.getString("clipboard_direction", "bidirectional")
             val autoSync = sharedPrefs.getBoolean("clipboard_auto_sync", true)
+            Log.i(TAG, "onPrimaryClipChanged: direction=$direction, autoSync=$autoSync")
 
             if (!autoSync || (direction != "bidirectional" && direction != "mobile_to_desktop")) {
-                Log.i(TAG, "Local phone copy event ignored (direction: $direction, autoSync: $autoSync)")
+                Log.i(TAG, "onPrimaryClipChanged: Ignored due to config settings.")
                 return@addPrimaryClipChangedListener
             }
 
@@ -799,8 +844,10 @@ class ConnectionService : Service() {
             var clipText = ""
             try {
                 val clipData = clipboardManager.primaryClip
+                Log.i(TAG, "onPrimaryClipChanged: primaryClip read attempt: clipData=$clipData")
                 if (clipData != null && clipData.itemCount > 0) {
                     clipText = clipData.getItemAt(0).text?.toString() ?: ""
+                    Log.i(TAG, "onPrimaryClipChanged: clipText='$clipText'")
                     if (clipText.isNotEmpty()) {
                         hasRead = true
                     }
@@ -812,8 +859,10 @@ class ConnectionService : Service() {
             if (hasRead) {
                 val trimmedText = clipText.trim()
                 val trimmedLast = lastSyncedClipboardText.trim()
+                Log.i(TAG, "onPrimaryClipChanged: trimmedText='$trimmedText', trimmedLast='$trimmedLast'")
                 if (trimmedText.isNotEmpty() && trimmedText != trimmedLast) {
                     val timePassed = System.currentTimeMillis() - lastIncomingSyncTime
+                    Log.i(TAG, "onPrimaryClipChanged: timePassed=$timePassed")
                     if (timePassed < 1500) {
                         Log.d(TAG, "Ignoring local clipboard change due to recent incoming sync ($timePassed ms ago)")
                         return@addPrimaryClipChangedListener
@@ -821,11 +870,17 @@ class ConnectionService : Service() {
                     Log.i(TAG, "Local phone copy event detected (foreground). Syncing clipboard to desktop.")
                     lastSyncedClipboardText = clipText
                     relayClipboardState(clipText)
+                } else {
+                    Log.i(TAG, "onPrimaryClipChanged: Text ignored because it matches last synced text or is empty")
                 }
             } else {
-                // Background copy event detected but blocked. Prompt user to sync!
-                Log.i(TAG, "Background copy event detected. Showing sync notification.")
-                showClipboardSyncNotification()
+                val isActivityForeground = MainActivity.instance?.isActivityInForeground == true
+                if (!isActivityForeground) {
+                    Log.i(TAG, "Background copy event detected (hasRead=false). Showing sync notification.")
+                    showClipboardSyncNotification()
+                } else {
+                    Log.i(TAG, "Background copy callback fired (hasRead=false), but MainActivity is in foreground. Skipping notification.")
+                }
             }
         }
     }
@@ -923,6 +978,77 @@ class ConnectionService : Service() {
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error updating clipboard config on daemon: ${e.message}")
+            }
+        }
+    }
+
+    fun getAudioConfigFromDaemon() {
+        if (!isWsConnected) return
+        scope.launch {
+            try {
+                val request = Request.Builder()
+                    .url("$daemonUrl/api/v1/audio/config")
+                    .get()
+                    .build()
+
+                client.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        val bodyStr = response.body?.string() ?: ""
+                        Log.i(TAG, "Fetched audio config: $bodyStr")
+                        val json = JSONObject(bodyStr)
+                        val direction = json.optString("audio_direction", "desktop_to_mobile")
+                        val mode = json.optString("playback_mode", "destination_only")
+                        val active = json.optBoolean("wifi_speaker_active", false)
+
+                        val sharedPrefs = getSharedPreferences("platypusd_prefs", Context.MODE_PRIVATE)
+                        sharedPrefs.edit()
+                            .putString("audio_direction", direction)
+                            .putString("audio_playback_mode", mode)
+                            .putBoolean("wifi_speaker_active", active)
+                            .apply()
+
+                        scope.launch(Dispatchers.Main) {
+                            MainActivity.instance?.refreshAudioUi()
+                        }
+
+                        if (active && direction == "desktop_to_mobile") {
+                            startUdpAudioReceiver()
+                        } else {
+                            stopUdpAudioReceiver()
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error fetching audio config: ${e.message}")
+            }
+        }
+    }
+
+    fun updateAudioConfigOnDaemon(direction: String, mode: String, active: Boolean) {
+        if (!isWsConnected) return
+        scope.launch {
+            try {
+                val json = JSONObject().apply {
+                    put("audio_direction", direction)
+                    put("playback_mode", mode)
+                    put("wifi_speaker_active", active)
+                }
+                val mediaType = "application/json; charset=utf-8".toMediaType()
+                val body = json.toString().toRequestBody(mediaType)
+                val request = Request.Builder()
+                    .url("$daemonUrl/api/v1/audio/config")
+                    .post(body)
+                    .build()
+
+                client.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        Log.i(TAG, "Successfully updated audio config on daemon.")
+                    } else {
+                        Log.e(TAG, "Failed to update audio config: ${response.code}")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error updating audio config on daemon: ${e.message}")
             }
         }
     }

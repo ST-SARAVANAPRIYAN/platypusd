@@ -57,6 +57,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/v1/bluetooth/disconnect", post(routes::disconnect_bluetooth_device_route))
         .route("/api/v1/speaker/start", post(routes::speaker_start))
         .route("/api/v1/speaker/stop", post(routes::speaker_stop))
+        .route("/api/v1/audio/config", get(routes::get_audio_config).post(routes::set_audio_config))
         .route("/api/v1/calls/gateway/toggle", post(routes::toggle_call_gateway))
         .route("/api/v1/events", get(ws::ws_handler))
 
