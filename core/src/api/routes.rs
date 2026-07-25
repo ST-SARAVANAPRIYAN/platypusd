@@ -626,12 +626,14 @@ pub async fn set_audio_config(
     let old_active = cfg.wifi_speaker_active;
     let old_mode = cfg.playback_mode.clone();
     let old_dir = cfg.audio_direction.clone();
+    let old_latency = cfg.audio_latency;
     
     cfg.audio_direction = payload.audio_direction.clone();
     cfg.playback_mode = payload.playback_mode.clone();
     cfg.wifi_speaker_active = payload.wifi_speaker_active;
+    cfg.audio_latency = payload.audio_latency;
     
-    info!("Updated audio configuration: direction={}, mode={}, active={}", cfg.audio_direction, cfg.playback_mode, cfg.wifi_speaker_active);
+    info!("Updated audio configuration: direction={}, mode={}, active={}, latency={}ms", cfg.audio_direction, cfg.playback_mode, cfg.wifi_speaker_active, cfg.audio_latency);
 
     let mut start_speaker = false;
     let mut stop_speaker = false;
@@ -640,7 +642,7 @@ pub async fn set_audio_config(
         if cfg.audio_direction == "mobile_to_desktop" {
             stop_speaker = true;
             cfg.wifi_speaker_active = false;
-        } else if !old_active || old_mode != cfg.playback_mode || old_dir != cfg.audio_direction {
+        } else if !old_active || old_mode != cfg.playback_mode || old_dir != cfg.audio_direction || old_latency != cfg.audio_latency {
             if old_active {
                 stop_speaker = true;
             }

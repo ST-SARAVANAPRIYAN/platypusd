@@ -89,6 +89,7 @@ class MainActivity : ComponentActivity() {
     val audioDirectionState = mutableStateOf("desktop_to_mobile")
     val audioPlaybackModeState = mutableStateOf("destination_only")
     val wifiSpeakerActiveState = mutableStateOf(false)
+    val audioLatencyState = mutableStateOf(60)
 
     // Files State
     private val currentPcPathState = mutableStateOf("")
@@ -171,6 +172,7 @@ class MainActivity : ComponentActivity() {
         audioDirectionState.value = sharedPrefs.getString("audio_direction", "desktop_to_mobile") ?: "desktop_to_mobile"
         audioPlaybackModeState.value = sharedPrefs.getString("audio_playback_mode", "destination_only") ?: "destination_only"
         wifiSpeakerActiveState.value = sharedPrefs.getBoolean("wifi_speaker_active", false)
+        audioLatencyState.value = sharedPrefs.getInt("audio_latency", 60)
 
         startIntegrationService()
         checkPermissions()
@@ -229,23 +231,26 @@ class MainActivity : ComponentActivity() {
             audioDirectionState.value = sharedPrefs.getString("audio_direction", "desktop_to_mobile") ?: "desktop_to_mobile"
             audioPlaybackModeState.value = sharedPrefs.getString("audio_playback_mode", "destination_only") ?: "destination_only"
             wifiSpeakerActiveState.value = sharedPrefs.getBoolean("wifi_speaker_active", false)
+            audioLatencyState.value = sharedPrefs.getInt("audio_latency", 60)
         }
     }
 
-    fun updateAudioConfig(direction: String, mode: String, active: Boolean) {
+    fun updateAudioConfig(direction: String, mode: String, active: Boolean, latency: Int = audioLatencyState.value) {
         runOnUiThread {
             audioDirectionState.value = direction
             audioPlaybackModeState.value = mode
             wifiSpeakerActiveState.value = active
+            audioLatencyState.value = latency
             
             val sharedPrefs = getSharedPreferences("platypusd_prefs", Context.MODE_PRIVATE)
             sharedPrefs.edit()
                 .putString("audio_direction", direction)
                 .putString("audio_playback_mode", mode)
                 .putBoolean("wifi_speaker_active", active)
+                .putInt("audio_latency", latency)
                 .apply()
             
-            ConnectionService.instance?.updateAudioConfigOnDaemon(direction, mode, active)
+            ConnectionService.instance?.updateAudioConfigOnDaemon(direction, mode, active, latency)
         }
     }
 
@@ -1290,6 +1295,22 @@ class MainActivity : ComponentActivity() {
                                     )
                                     Text("Play on Both Devices simultaneously", fontSize = 12.sp)
                                 }
+                            }
+
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("Sync Latency", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                Text(
+                                    "Dynamic (Auto-Sync)",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
                             }
 
                             // Start / Stop button

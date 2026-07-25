@@ -13,6 +13,12 @@ pub struct AudioConfig {
     pub audio_direction: String, // "desktop_to_mobile" or "mobile_to_desktop"
     pub playback_mode: String,  // "destination_only" or "both"
     pub wifi_speaker_active: bool,
+    #[serde(default = "default_audio_latency")]
+    pub audio_latency: u32,
+}
+
+fn default_audio_latency() -> u32 {
+    60
 }
 
 pub struct WifiSpeakerService {
@@ -37,6 +43,7 @@ impl WifiSpeakerService {
                 audio_direction: "desktop_to_mobile".to_string(),
                 playback_mode: "destination_only".to_string(),
                 wifi_speaker_active: false,
+                audio_latency: 60,
             })),
             routing_mutex: Mutex::new(()),
         }
@@ -52,6 +59,9 @@ impl WifiSpeakerService {
             info!("Wi-Fi Speaker Service is already active.");
             return Ok(());
         }
+
+        let latency_msec = self.config.lock().await.audio_latency;
+
         self.is_active.store(true, Ordering::Relaxed);
 
         info!("Starting Wi-Fi Speaker Service to target IP: {} with playback mode: {:?}", target_ip, playback_mode);
@@ -91,39 +101,61 @@ impl WifiSpeakerService {
         let base_sink = original_sink.clone().unwrap_or_else(|| "alsa_output.pci-0000_00_1f.3.analog-stereo".to_string());
         info!("Determined default hardware audio sink: {}", base_sink);
 
-        // 1. Load module-null-sink if not already loaded
-        let mod_id = match Command::new("pactl")
-            .args(&["load-module", "module-null-sink", "sink_name=wifi_speaker", "sink_properties=device.description=Wi-Fi_Speaker"])
-            .output()
-            .await
-        {
-            Ok(out) if out.status.success() => {
-                let id = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                info!("Loaded module-null-sink with ID: {}", id);
-                Some(id)
+        // 1. Check if module-null-sink with name wifi_speaker is already loaded
+        let mut null_sink_exists = false;
+        if let Ok(out) = Command::new("pactl").args(&["list", "short", "sinks"]).output().await {
+            if out.status.success() {
+                let stdout_str = String::from_utf8_lossy(&out.stdout);
+                for line in stdout_str.lines() {
+                    if line.contains("wifi_speaker") {
+                        null_sink_exists = true;
+                        break;
+                    }
+                }
             }
-            Ok(out) => {
-                let err = String::from_utf8_lossy(&out.stderr);
-                warn!("Failed to load module-null-sink, it might already be loaded: {}", err);
-                None
-            }
-            Err(e) => {
-                warn!("Failed to run pactl load-module: {}", e);
-                None
-            }
-        };
+        }
 
-        if let Some(ref id) = mod_id {
-            *self.module_id.lock().await = Some(id.clone());
+        if !null_sink_exists {
+            let mod_id = match Command::new("pactl")
+                .args(&["load-module", "module-null-sink", "sink_name=wifi_speaker", "sink_properties=device.description=Wi-Fi_Speaker"])
+                .output()
+                .await
+            {
+                Ok(out) if out.status.success() => {
+                    let id = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                    info!("Loaded module-null-sink with ID: {}", id);
+                    Some(id)
+                }
+                Ok(out) => {
+                    let err = String::from_utf8_lossy(&out.stderr);
+                    warn!("Failed to load module-null-sink, it might already be loaded: {}", err);
+                    None
+                }
+                Err(e) => {
+                    warn!("Failed to run pactl load-module: {}", e);
+                    None
+                }
+            };
+
+            if let Some(ref id) = mod_id {
+                *self.module_id.lock().await = Some(id.clone());
+            }
+        } else {
+            info!("Virtual null sink wifi_speaker is already loaded, reusing it.");
         }
 
         // Store original hardware sink to restore on stop
         *self.original_default_sink.lock().await = Some(base_sink.clone());
 
         // Always redirect default output to wifi_speaker
-        info!("Setting default audio sink to wifi_speaker...");
+        info!("Setting default audio sink to wifi_speaker and forcing volume to 100%...");
         let _ = Command::new("pactl")
             .args(&["set-default-sink", "wifi_speaker"])
+            .output()
+            .await;
+
+        let _ = Command::new("pactl")
+            .args(&["set-sink-volume", "wifi_speaker", "100%"])
             .output()
             .await;
 
@@ -148,9 +180,10 @@ impl WifiSpeakerService {
 
         // If playing on both devices, loop back wifi_speaker monitor to the hardware speakers
         if mode == "both" {
-            info!("Dual playback mode: looping back wifi_speaker.monitor to hardware sink {}...", base_sink);
+            let loopback_latency = latency_msec + 15;
+            info!("Dual playback mode: looping back wifi_speaker.monitor to hardware sink {} with latency {}ms...", base_sink, loopback_latency);
             match Command::new("pactl")
-                .args(&["load-module", "module-loopback", "source=wifi_speaker.monitor", &format!("sink={}", base_sink), "latency_msec=100"])
+                .args(&["load-module", "module-loopback", "source=wifi_speaker.monitor", &format!("sink={}", base_sink), &format!("latency_msec={}", loopback_latency)])
                 .output()
                 .await
             {
@@ -175,13 +208,26 @@ impl WifiSpeakerService {
         *self.parec_child_killer.lock().await = Some(tx);
 
         tokio::spawn(async move {
+            let mut encoder = match opus::Encoder::new(
+                48000,
+                opus::Channels::Stereo,
+                opus::Application::LowDelay,
+            ) {
+                Ok(enc) => enc,
+                Err(e) => {
+                    error!("Failed to initialize Opus Encoder: {}", e);
+                    is_active_clone.store(false, Ordering::Relaxed);
+                    return;
+                }
+            };
+
             let mut parec = match Command::new("parec")
                 .args(&[
                     "--device=wifi_speaker.monitor",
                     "--format=s16le",
                     "--rate=48000",
                     "--channels=2",
-                    "--latency-msec=10",
+                    "--latency-msec=5",
                 ])
                 .stdout(Stdio::piped())
                 .spawn()
@@ -206,18 +252,30 @@ impl WifiSpeakerService {
             };
 
             let target_addr = format!("{}:9095", target_ip);
-            info!("Streaming audio UDP packets to {}", target_addr);
+            info!("Streaming Opus UDP packets to {}", target_addr);
 
             // Buffer size: 960 bytes (5ms of 48000Hz, 16bit, stereo)
             let mut buffer = vec![0u8; 960];
+            let mut pcm_samples = vec![0i16; 480];
+            let mut opus_data = vec![0u8; 960];
             
             tokio::select! {
                 _ = async {
                     while is_active_clone.load(Ordering::Relaxed) {
                         match stdout.read_exact(&mut buffer).await {
                             Ok(_) => {
-                                if let Err(e) = socket.send_to(&buffer, &target_addr).await {
-                                    warn!("Failed to send UDP audio packet: {}", e);
+                                for (i, chunk) in buffer.chunks_exact(2).enumerate() {
+                                    pcm_samples[i] = i16::from_le_bytes([chunk[0], chunk[1]]);
+                                }
+                                match encoder.encode(&pcm_samples, &mut opus_data) {
+                                    Ok(size) => {
+                                        if let Err(e) = socket.send_to(&opus_data[..size], &target_addr).await {
+                                            warn!("Failed to send UDP audio packet: {}", e);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to encode Opus packet: {}", e);
+                                    }
                                 }
                             }
                             Err(e) => {
@@ -296,7 +354,9 @@ impl WifiSpeakerService {
                 .await;
         }
 
-        // 3. Unload PulseAudio null sink module
+        // 3. Keep virtual null-sink loaded to prevent race conditions during rapid settings switches.
+        // We only clean it up when the daemon shuts down, avoiding PipeWire race conditions.
+        /*
         let mut mod_id = self.module_id.lock().await;
         if let Some(id) = mod_id.take() {
             info!("Unloading module-null-sink ID: {}", id);
@@ -310,6 +370,56 @@ impl WifiSpeakerService {
                 .args(&["unload-module", "module-null-sink"])
                 .output()
                 .await;
+        }
+        */
+
+        Ok(())
+    }
+
+    pub async fn update_loopback_latency(&self, latency_msec: u32) -> anyhow::Result<()> {
+        let _guard = self.routing_mutex.lock().await;
+        if !self.is_active.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+
+        let mode = self.config.lock().await.playback_mode.clone();
+        if mode != "both" {
+            return Ok(());
+        }
+
+        // Get the original default sink (hardware speakers)
+        let base_sink = self.original_default_sink.lock().await.clone()
+            .unwrap_or_else(|| "alsa_output.pci-0000_00_1f.3.analog-stereo".to_string());
+
+        // 1. Unload old loopback module if loaded
+        let mut loop_id_lock = self.loopback_module_id.lock().await;
+        if let Some(id) = loop_id_lock.take() {
+            info!("Dynamic Sync: unloading old module-loopback ID: {}", id);
+            let _ = Command::new("pactl")
+                .args(&["unload-module", &id])
+                .output()
+                .await;
+        }
+
+        // 2. Load new loopback module with updated latency
+        info!("Dynamic Sync: looping back wifi_speaker.monitor to hardware sink {} with latency {}ms...", base_sink, latency_msec);
+        match Command::new("pactl")
+            .args(&["load-module", "module-loopback", "source=wifi_speaker.monitor", &format!("sink={}", base_sink), &format!("latency_msec={}", latency_msec)])
+            .output()
+            .await
+        {
+            Ok(out) if out.status.success() => {
+                let new_id = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                info!("Dynamic Sync: loaded new module-loopback with ID: {}", new_id);
+                *loop_id_lock = Some(new_id);
+            }
+            Ok(out) => {
+                let err = String::from_utf8_lossy(&out.stderr);
+                warn!("Dynamic Sync: failed to load module-loopback: {}", err);
+            }
+            Err(e) => {
+                warn!("Dynamic Sync: failed to run pactl load-module: {}", e);
+            }
         }
 
         Ok(())

@@ -225,13 +225,23 @@ class ConnectionService : Service() {
 
             udpAudioThread = Thread {
                 Log.i(TAG, "UDP Audio Receiver thread started, listening on port 9095")
-                val buffer = ByteArray(960)
-                val packet = DatagramPacket(buffer, buffer.size)
                 var socket: java.net.DatagramSocket? = null
                 var audioTrack: android.media.AudioTrack? = null
                 val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
                 var packetCount = 0
                 var firstPacketReceived = false
+
+                var opusDecoder: io.github.jaredmdobson.concentus.OpusDecoder? = null
+                try {
+                    opusDecoder = io.github.jaredmdobson.concentus.OpusDecoder(48000, 2)
+                    Log.i(TAG, "Concentus OpusDecoder initialized successfully.")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to initialize Concentus OpusDecoder: ${e.message}")
+                }
+
+                val buffer = ByteArray(960)
+                val packet = DatagramPacket(buffer, buffer.size)
+                val pcmOutput = ShortArray(480) // 240 frames * 2 channels
 
                 val focusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
                     when (focusChange) {
@@ -265,6 +275,8 @@ class ConnectionService : Service() {
                     android.media.AudioFormat.ENCODING_PCM_16BIT
                 )
                 
+                val bufferSizeInBytes = Math.max(minBuf, 60000) // ~312ms buffer capacity
+
                 audioTrack = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     android.media.AudioTrack.Builder()
                         .setAudioAttributes(
@@ -280,7 +292,7 @@ class ConnectionService : Service() {
                                 .setChannelMask(android.media.AudioFormat.CHANNEL_OUT_STEREO)
                                 .build()
                         )
-                        .setBufferSizeInBytes(Math.max(minBuf, 4800))
+                        .setBufferSizeInBytes(bufferSizeInBytes)
                         .setTransferMode(android.media.AudioTrack.MODE_STREAM)
                         .setPerformanceMode(android.media.AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
                         .build()
@@ -295,7 +307,7 @@ class ConnectionService : Service() {
                             .setSampleRate(48000)
                             .setChannelMask(android.media.AudioFormat.CHANNEL_OUT_STEREO)
                             .build(),
-                        Math.max(minBuf, 4800),
+                        bufferSizeInBytes,
                         android.media.AudioTrack.MODE_STREAM,
                         AudioManager.AUDIO_SESSION_ID_GENERATE
                     )
@@ -306,19 +318,23 @@ class ConnectionService : Service() {
                         48000,
                         android.media.AudioFormat.CHANNEL_OUT_STEREO,
                         android.media.AudioFormat.ENCODING_PCM_16BIT,
-                        Math.max(minBuf, 4800),
+                        bufferSizeInBytes,
                         android.media.AudioTrack.MODE_STREAM
                     )
                 }
-
+ 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && audioTrack != null) {
-                    val minBufInFrames = minBuf / 4
-                    val targetBufferSizeInFrames = Math.max(minBufInFrames, 240 * 12) // 12 packets = 60ms of jitter buffer
+                    val targetBufferSizeInFrames = 48 * 300 // 300ms of frames (14400)
                     val actualBufferInFrames = audioTrack.setBufferSizeInFrames(targetBufferSizeInFrames)
-                    Log.i(TAG, "Configured active AudioTrack buffer size to $actualBufferInFrames frames (requested $targetBufferSizeInFrames)")
+                    Log.i(TAG, "Configured active AudioTrack buffer size to $actualBufferInFrames frames for headroom (requested $targetBufferSizeInFrames)")
                 }
 
-                  while (isUdpAudioActive) {
+                var totalWrittenFrames: Long = 0
+                var adaptiveTargetLatencyMs = getTargetLatency()
+                var lastUnderrunCount = 0
+                var stablePacketCounter = 0
+
+                while (isUdpAudioActive) {
                     try {
                         packet.length = buffer.size
                         socket.receive(packet)
@@ -348,14 +364,117 @@ class ConnectionService : Service() {
                             )
                         }
 
-                        if (audioTrack != null && audioTrack.playState == android.media.AudioTrack.PLAYSTATE_PLAYING) {
-                            audioTrack.write(packet.data, packet.offset, packet.length)
+                        // Decode Opus compressed packet back to raw PCM short array
+                        val decodedSamplesPerChannel = opusDecoder?.decode(
+                            packet.data,
+                            packet.offset,
+                            packet.length,
+                            pcmOutput,
+                            0,
+                            240, // 5ms frame size at 48kHz = 240 frames
+                            false
+                        ) ?: 0
+
+                        if (audioTrack != null && audioTrack.playState == android.media.AudioTrack.PLAYSTATE_PLAYING && decodedSamplesPerChannel > 0) {
+                            audioTrack.write(pcmOutput, 0, decodedSamplesPerChannel * 2)
+                            totalWrittenFrames += decodedSamplesPerChannel
+
+                            // Periodically run Drift/Latency Correction (every 50 packets = 250ms)
+                            if (packetCount % 50 == 0 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                val playedFrames = audioTrack.playbackHeadPosition.toLong() and 0xffffffffL
+                                
+                                if (playedFrames > 0L) {
+                                    // 1. Adaptive Jitter Buffer - check for underruns
+                                    val currentUnderruns = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                                        audioTrack.underrunCount
+                                    } else {
+                                        0
+                                    }
+
+                                    if (currentUnderruns > lastUnderrunCount) {
+                                        val newUnderruns = currentUnderruns - lastUnderrunCount
+                                        lastUnderrunCount = currentUnderruns
+                                        
+                                        // Increase target latency to absorb network jitter
+                                        val oldTarget = adaptiveTargetLatencyMs
+                                        adaptiveTargetLatencyMs = Math.min(80, adaptiveTargetLatencyMs + 10)
+                                        if (adaptiveTargetLatencyMs != oldTarget) {
+                                            Log.w(TAG, "Underrun detected ($newUnderruns). Increasing target latency to ${adaptiveTargetLatencyMs}ms for stability.")
+                                        }
+                                        stablePacketCounter = 0
+                                    } else {
+                                        stablePacketCounter += 50
+                                        // If stable for 3000 packets (~15 seconds), try to decrease target latency to keep absolute delay low
+                                        if (stablePacketCounter >= 3000) {
+                                            stablePacketCounter = 0
+                                            val oldTarget = adaptiveTargetLatencyMs
+                                            val minAllowedTarget = getTargetLatency()
+                                            adaptiveTargetLatencyMs = Math.max(minAllowedTarget, adaptiveTargetLatencyMs - 5)
+                                            if (adaptiveTargetLatencyMs != oldTarget) {
+                                                Log.i(TAG, "Stream stable. Decreasing target latency to ${adaptiveTargetLatencyMs}ms to optimize delay.")
+                                            }
+                                        }
+                                    }
+
+                                    val queuedFrames = totalWrittenFrames - playedFrames
+                                    val currentLatencyMs = queuedFrames.toFloat() / 48f
+                                    val targetLatencyMs = adaptiveTargetLatencyMs.toFloat()
+                                    Log.i(TAG, "Stats: packetCount=$packetCount, written=$totalWrittenFrames, played=$playedFrames, queued=$queuedFrames, latency=${currentLatencyMs.toInt()}ms, target=${targetLatencyMs.toInt()}ms, underruns=$currentUnderruns")
+
+                                    // Calculate and report total playout latency to the desktop daemon
+                                    val trueLatencyMs = calculateTotalLatencyMs(audioTrack, totalWrittenFrames)
+                                    val totalPlayoutLatencyMs = trueLatencyMs + 5 // +5ms Wi-Fi transit
+                                    reportTotalLatency(totalPlayoutLatencyMs, packetCount)
+
+                                    // Hard flush if buffer bloat is too high (> target + 80ms)
+                                    if (currentLatencyMs > targetLatencyMs + 80) {
+                                        Log.w(TAG, "Drift Correction: buffer bloat detected (${currentLatencyMs.toInt()}ms > target ${targetLatencyMs.toInt()}ms + 80ms). Performing hard flush.")
+                                        try {
+                                            audioTrack.pause()
+                                            audioTrack.flush()
+                                            totalWrittenFrames = 0
+                                            audioTrack.play()
+                                        } catch (e: Exception) {
+                                            Log.e(TAG, "Failed to flush AudioTrack: ${e.message}")
+                                        }
+                                    } else {
+                                        val currentSpeed = try {
+                                            audioTrack.playbackParams.speed
+                                        } catch (e: Exception) {
+                                            1.0f
+                                        }
+
+                                        var newSpeed = 1.00f
+                                        if (currentLatencyMs > targetLatencyMs + 15) {
+                                            // Speed up slightly (1.03x) to catch up
+                                            newSpeed = 1.03f
+                                        } else if (currentLatencyMs < targetLatencyMs - 15 && currentLatencyMs > 5) {
+                                            // Slow down slightly (0.97x) to let the buffer build up
+                                            newSpeed = 0.97f
+                                        }
+
+                                        if (Math.abs(currentSpeed - newSpeed) > 0.005f) {
+                                            Log.i(TAG, "Drift Correction: target=${targetLatencyMs.toInt()}ms, current=${currentLatencyMs.toInt()}ms, setting playback speed to ${newSpeed}x")
+                                            try {
+                                                val params = audioTrack.playbackParams
+                                                params.speed = newSpeed
+                                                audioTrack.playbackParams = params
+                                            } catch (e: Exception) {
+                                                Log.e(TAG, "Failed to set playback speed: ${e.message}")
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    Log.d(TAG, "Stats: buffering startup, playedFrames is 0 (written=$totalWrittenFrames)")
+                                }
+                            }
                         }
                     } catch (e: java.io.InterruptedIOException) {
                         // socket timeout, pause to release hardware resources/save battery
                         if (audioTrack != null && audioTrack.playState == android.media.AudioTrack.PLAYSTATE_PLAYING) {
                             audioTrack.pause()
                             audioTrack.flush()
+                            totalWrittenFrames = 0
                             @Suppress("DEPRECATION")
                             audioManager.abandonAudioFocus(focusChangeListener)
                         }
@@ -536,7 +655,14 @@ class ConnectionService : Service() {
                 Log.i(TAG, "WebSocket event connection opened to: $wsUrl")
                 isBluetoothConnectedCached = null // force update
                 getClipboardConfigFromDaemon()
-                getAudioConfigFromDaemon()
+                
+                // Push local settings to daemon upon connection to ensure daemon aligns with phone UI state
+                val sharedPrefs = getSharedPreferences("platypusd_prefs", Context.MODE_PRIVATE)
+                val direction = sharedPrefs.getString("audio_direction", "desktop_to_mobile") ?: "desktop_to_mobile"
+                val mode = sharedPrefs.getString("audio_playback_mode", "destination_only") ?: "destination_only"
+                val active = sharedPrefs.getBoolean("wifi_speaker_active", false)
+                val latency = sharedPrefs.getInt("audio_latency", 60)
+                updateAudioConfigOnDaemon(direction, mode, active, latency)
                 scope.launch {
                     while (isWsConnected) {
                         checkBluetoothConnectionToHost()
@@ -591,13 +717,15 @@ class ConnectionService : Service() {
                             val direction = data.optString("audio_direction", "desktop_to_mobile")
                             val mode = data.optString("playback_mode", "destination_only")
                             val active = data.optBoolean("wifi_speaker_active", false)
-                            Log.i(TAG, "Received audio config change: direction=$direction, mode=$mode, active=$active")
+                            val latency = data.optInt("audio_latency", 60)
+                            Log.i(TAG, "Received audio config change: direction=$direction, mode=$mode, active=$active, latency=$latency")
 
                             val sharedPrefs = getSharedPreferences("platypusd_prefs", Context.MODE_PRIVATE)
                             sharedPrefs.edit()
                                 .putString("audio_direction", direction)
                                 .putString("audio_playback_mode", mode)
                                 .putBoolean("wifi_speaker_active", active)
+                                .putInt("audio_latency", latency)
                                 .apply()
 
                             scope.launch(Dispatchers.Main) {
@@ -1031,12 +1159,14 @@ class ConnectionService : Service() {
                         val direction = json.optString("audio_direction", "desktop_to_mobile")
                         val mode = json.optString("playback_mode", "destination_only")
                         val active = json.optBoolean("wifi_speaker_active", false)
+                        val latency = json.optInt("audio_latency", 60)
 
                         val sharedPrefs = getSharedPreferences("platypusd_prefs", Context.MODE_PRIVATE)
                         sharedPrefs.edit()
                             .putString("audio_direction", direction)
                             .putString("audio_playback_mode", mode)
                             .putBoolean("wifi_speaker_active", active)
+                            .putInt("audio_latency", latency)
                             .apply()
 
                         scope.launch(Dispatchers.Main) {
@@ -1056,7 +1186,7 @@ class ConnectionService : Service() {
         }
     }
 
-    fun updateAudioConfigOnDaemon(direction: String, mode: String, active: Boolean) {
+    fun updateAudioConfigOnDaemon(direction: String, mode: String, active: Boolean, latency: Int = getTargetLatency()) {
         if (!isWsConnected) return
         scope.launch {
             try {
@@ -1064,6 +1194,7 @@ class ConnectionService : Service() {
                     put("audio_direction", direction)
                     put("playback_mode", mode)
                     put("wifi_speaker_active", active)
+                    put("audio_latency", latency)
                 }
                 val mediaType = "application/json; charset=utf-8".toMediaType()
                 val body = json.toString().toRequestBody(mediaType)
@@ -1081,6 +1212,95 @@ class ConnectionService : Service() {
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error updating audio config on daemon: ${e.message}")
+            }
+        }
+    }
+
+    fun isUsbTetheringActive(): Boolean {
+        try {
+            val interfaces = java.net.NetworkInterface.getNetworkInterfaces()
+            while (interfaces.hasMoreElements()) {
+                val iface = interfaces.nextElement()
+                if (iface.name.contains("rndis") || iface.name.contains("usb")) {
+                    val addrs = iface.inetAddresses
+                    while (addrs.hasMoreElements()) {
+                        val addr = addrs.nextElement()
+                        if (!addr.isLoopbackAddress && addr is java.net.Inet4Address) {
+                            return true
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {}
+        return false
+    }
+
+    fun getTargetLatency(): Int {
+        if (isUsbTetheringActive()) {
+            Log.i(TAG, "USB Tethering active. Auto-configuring latency target to 20ms.")
+            return 20
+        }
+        val sharedPrefs = getSharedPreferences("platypusd_prefs", Context.MODE_PRIVATE)
+        return sharedPrefs.getInt("audio_latency", 60)
+    }
+
+    private var lastReportedLatencyMs = -1
+
+    private fun calculateTotalLatencyMs(audioTrack: android.media.AudioTrack, totalWrittenFrames: Long): Int {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+            val timestamp = android.media.AudioTimestamp()
+            if (audioTrack.getTimestamp(timestamp)) {
+                val currentNano = System.nanoTime()
+                val frameDiff = totalWrittenFrames - timestamp.framePosition
+                val frameDiffNs = (frameDiff * 1_000_000_000L) / 48000L
+                val estimatedPlayNano = timestamp.nanoTime + frameDiffNs
+                val latencyNs = estimatedPlayNano - currentNano
+                val latencyMs = latencyNs / 1_000_000L
+                if (latencyMs in 5..300) {
+                    return latencyMs.toInt()
+                }
+            }
+        }
+        val playedFrames = audioTrack.playbackHeadPosition.toLong() and 0xffffffffL
+        val queueMs = ((totalWrittenFrames - playedFrames) / 48).toInt()
+        return queueMs + 45
+    }
+
+    private var lastReportTimeMs = 0L
+
+    private fun reportTotalLatency(totalLatencyMs: Int, packetCount: Int) {
+        if (packetCount < 800) {
+            // Ignore during the first 4 seconds of startup stabilization to prevent rapid reload loops
+            return
+        }
+        if (activeWebSocket == null || !isWsConnected) return
+        
+        val now = System.currentTimeMillis()
+        if (now - lastReportTimeMs < 15000L) {
+            // Enforce a strict 15-second cooldown to protect speakers from rapid reloading
+            return
+        }
+        
+        if (lastReportedLatencyMs != -1 && Math.abs(totalLatencyMs - lastReportedLatencyMs) <= 40) {
+            // Enforce a 40ms deadband to filter out minor/unnoticeable drift adjustments
+            return
+        }
+        
+        lastReportedLatencyMs = totalLatencyMs
+        lastReportTimeMs = now
+        scope.launch {
+            try {
+                val json = org.json.JSONObject().apply {
+                    put("command", "ReportLatency")
+                    put("data", org.json.JSONObject().apply {
+                        put("device_id", deviceId)
+                        put("total_latency_ms", totalLatencyMs)
+                    })
+                }
+                activeWebSocket?.send(json.toString())
+                Log.i(TAG, "Sent dynamic playout latency report to host: ${totalLatencyMs}ms (packetCount=$packetCount)")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error sending latency report: ${e.message}")
             }
         }
     }

@@ -162,6 +162,18 @@ async fn handle_socket(
                                     });
                                 }
                             }
+                        } else if cmd == "ReportLatency" {
+                            if let Some(data) = ws_cmd.get("data") {
+                                if let Some(total_latency_ms) = data.get("total_latency_ms").and_then(|l| l.as_u64()) {
+                                    info!("Client reported total speaker latency: {}ms. Updating desktop loopback delay...", total_latency_ms);
+                                    let service = state_clone.wifi_speaker_service.clone();
+                                    tokio::spawn(async move {
+                                        if let Err(e) = service.update_loopback_latency(total_latency_ms as u32).await {
+                                            warn!("Failed to update loopback latency: {}", e);
+                                        }
+                                    });
+                                }
+                            }
                         } else if cmd == "StartFileServer" || cmd == "StopFileServer" {
                             let _ = state_clone.tx.send(WsMessage {
                                 event: cmd.to_string(),

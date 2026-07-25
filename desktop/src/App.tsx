@@ -32,6 +32,7 @@ interface StatusData {
     audio_direction: 'desktop_to_mobile' | 'mobile_to_desktop';
     playback_mode: 'destination_only' | 'both';
     wifi_speaker_active: boolean;
+    audio_latency: number;
   };
 }
 
@@ -49,6 +50,7 @@ export default function App() {
   const [audioSyncEnabled, setAudioSyncEnabled] = useState<boolean>(true);
   const [audioDirection, setAudioDirection] = useState<'desktop_to_mobile' | 'mobile_to_desktop'>('desktop_to_mobile');
   const [desktopToMobilePlaybackMode, setDesktopToMobilePlaybackMode] = useState<'destination_only' | 'both'>('destination_only');
+  const [audioLatency, setAudioLatency] = useState<number>(60);
   const [mobileToDesktopPlaybackMode, setMobileToDesktopPlaybackMode] = useState<'destination_only' | 'both'>('destination_only');
   const [lastClipboard, setLastClipboard] = useState<string>('');
   const [clipboardInput, setClipboardInput] = useState<string>('');
@@ -284,6 +286,7 @@ export default function App() {
         setAudioDirection(data.audio_config.audio_direction);
         setDesktopToMobilePlaybackMode(data.audio_config.playback_mode);
         setWifiSpeakerActive(data.audio_config.wifi_speaker_active);
+        setAudioLatency(data.audio_config.audio_latency || 60);
         setAudioSyncEnabled(data.audio_config.wifi_speaker_active || data.call_gateway_enabled);
       } else {
         setWifiSpeakerActive(data.wifi_speaker_active);
@@ -309,11 +312,13 @@ export default function App() {
     audio_direction?: 'desktop_to_mobile' | 'mobile_to_desktop';
     playback_mode?: 'destination_only' | 'both';
     wifi_speaker_active?: boolean;
+    audio_latency?: number;
   }) => {
     try {
       const currentDir = newConfig.audio_direction !== undefined ? newConfig.audio_direction : audioDirection;
       const currentMode = newConfig.playback_mode !== undefined ? newConfig.playback_mode : desktopToMobilePlaybackMode;
       const currentActive = newConfig.wifi_speaker_active !== undefined ? newConfig.wifi_speaker_active : wifiSpeakerActive;
+      const currentLatency = newConfig.audio_latency !== undefined ? newConfig.audio_latency : audioLatency;
 
       const res = await fetch('http://localhost:8080/api/v1/audio/config', {
         method: 'POST',
@@ -321,7 +326,8 @@ export default function App() {
         body: JSON.stringify({
           audio_direction: currentDir,
           playback_mode: currentMode,
-          wifi_speaker_active: currentActive
+          wifi_speaker_active: currentActive,
+          audio_latency: currentLatency
         })
       });
       if (!res.ok) throw new Error('Failed to update audio configuration');
@@ -329,6 +335,7 @@ export default function App() {
       if (newConfig.audio_direction !== undefined) setAudioDirection(newConfig.audio_direction);
       if (newConfig.playback_mode !== undefined) setDesktopToMobilePlaybackMode(newConfig.playback_mode);
       if (newConfig.wifi_speaker_active !== undefined) setWifiSpeakerActive(newConfig.wifi_speaker_active);
+      if (newConfig.audio_latency !== undefined) setAudioLatency(newConfig.audio_latency);
     } catch (err: any) {
       console.error(err);
       showToast(`Error updating config: ${err.message}`);
@@ -502,6 +509,7 @@ export default function App() {
             setAudioDirection(payload.data.audio_direction);
             setDesktopToMobilePlaybackMode(payload.data.playback_mode);
             setWifiSpeakerActive(payload.data.wifi_speaker_active);
+            setAudioLatency(payload.data.audio_latency || 60);
             if (payload.data.wifi_speaker_active) {
               setAudioSyncEnabled(true);
             }
@@ -1343,8 +1351,8 @@ export default function App() {
                                 </span>
                               </div>
                               <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.4rem' }}>
-                                <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Latency Profile</span>
-                                <span style={{ fontWeight: '500', fontSize: '0.9rem', color: 'var(--success)' }}>&lt; 5 ms (Low Latency)</span>
+                                <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Sync Latency</span>
+                                <span style={{ fontWeight: '500', fontSize: '0.9rem', color: 'var(--accent)' }}>Dynamic (Auto-Sync)</span>
                               </div>
                               <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.4rem' }}>
                                 <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Target Device</span>
@@ -1352,7 +1360,7 @@ export default function App() {
                               </div>
                               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                                 <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Format</span>
-                                <span style={{ fontWeight: '500', fontSize: '0.9rem' }}>Stereo 48.0 kHz 16-bit PCM</span>
+                                <span style={{ fontWeight: '500', fontSize: '0.9rem' }}>Opus Stereo 48.0 kHz</span>
                               </div>
                             </div>
                           </div>

@@ -1006,3 +1006,53 @@ input:checked + .slider:before {
 .speaker-pulse-ring-slow.active {
   animation: speakerPulseSlow 3s infinite ease-out;
 }
+
+/* M3-style Range Slider */
+.m3-slider {
+  -webkit-appearance: none;
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border-color);
+  outline: none;
+  margin: 10px 0;
+  transition: background 0.3s;
+}
+
+.m3-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+  transition: transform 0.1s, background-color 0.3s;
+}
+
+.m3-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+}
+
+.m3-slider::-webkit-slider-thumb:active {
+  transform: scale(1.3);
+}
+
+.m3-slider::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+  transition: transform 0.1s, background-color 0.3s;
+}
+
+.m3-slider::-moz-range-thumb:hover {
+  transform: scale(1.2);
+}
+
+.m3-slider::-moz-range-thumb:active {
+  transform: scale(1.3);
+}
+
