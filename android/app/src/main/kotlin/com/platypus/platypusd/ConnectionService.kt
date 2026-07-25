@@ -423,7 +423,7 @@ class ConnectionService : Service() {
 
                                     // Calculate and report total playout latency to the desktop daemon
                                     val trueLatencyMs = calculateTotalLatencyMs(audioTrack, totalWrittenFrames)
-                                    val totalPlayoutLatencyMs = trueLatencyMs + 5 // +5ms Wi-Fi transit
+                                    val totalPlayoutLatencyMs = trueLatencyMs + 20 // +20ms capture/encode/transit baseline
                                     reportTotalLatency(totalPlayoutLatencyMs, packetCount)
 
                                     // Hard flush if buffer bloat is too high (> target + 80ms)

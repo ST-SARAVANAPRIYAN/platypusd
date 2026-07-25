@@ -627,14 +627,20 @@ pub async fn set_audio_config(
     let old_mode = cfg.playback_mode.clone();
     let old_dir = cfg.audio_direction.clone();
     let old_latency = cfg.audio_latency;
+    let old_offset = cfg.sync_offset_ms;
     
     cfg.audio_direction = payload.audio_direction.clone();
     cfg.playback_mode = payload.playback_mode.clone();
     cfg.wifi_speaker_active = payload.wifi_speaker_active;
     cfg.audio_latency = payload.audio_latency;
+    cfg.sync_offset_ms = payload.sync_offset_ms;
     
-    info!("Updated audio configuration: direction={}, mode={}, active={}, latency={}ms", cfg.audio_direction, cfg.playback_mode, cfg.wifi_speaker_active, cfg.audio_latency);
+    info!(
+        "Updated audio configuration: direction={}, mode={}, active={}, latency={}ms, sync_offset={}ms",
+        cfg.audio_direction, cfg.playback_mode, cfg.wifi_speaker_active, cfg.audio_latency, cfg.sync_offset_ms
+    );
 
+    let offset_changed = old_offset != cfg.sync_offset_ms;
     let mut start_speaker = false;
     let mut stop_speaker = false;
 
@@ -667,6 +673,13 @@ pub async fn set_audio_config(
             warn!("No connected devices found to stream audio to.");
             let mut cfg = state.wifi_speaker_service.config.lock().await;
             cfg.wifi_speaker_active = false;
+        }
+    } else if cfg_clone.wifi_speaker_active && offset_changed {
+        if let Some(last_lat) = *state.wifi_speaker_service.last_reported_latency.lock().await {
+            let service = state.wifi_speaker_service.clone();
+            tokio::spawn(async move {
+                let _ = service.update_loopback_latency(last_lat).await;
+            });
         }
     }
 

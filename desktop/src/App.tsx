@@ -33,6 +33,7 @@ interface StatusData {
     playback_mode: 'destination_only' | 'both';
     wifi_speaker_active: boolean;
     audio_latency: number;
+    sync_offset_ms: number;
   };
 }
 
@@ -51,6 +52,7 @@ export default function App() {
   const [audioDirection, setAudioDirection] = useState<'desktop_to_mobile' | 'mobile_to_desktop'>('desktop_to_mobile');
   const [desktopToMobilePlaybackMode, setDesktopToMobilePlaybackMode] = useState<'destination_only' | 'both'>('destination_only');
   const [audioLatency, setAudioLatency] = useState<number>(60);
+  const [syncOffset, setSyncOffset] = useState<number>(0);
   const [mobileToDesktopPlaybackMode, setMobileToDesktopPlaybackMode] = useState<'destination_only' | 'both'>('destination_only');
   const [lastClipboard, setLastClipboard] = useState<string>('');
   const [clipboardInput, setClipboardInput] = useState<string>('');
@@ -287,6 +289,7 @@ export default function App() {
         setDesktopToMobilePlaybackMode(data.audio_config.playback_mode);
         setWifiSpeakerActive(data.audio_config.wifi_speaker_active);
         setAudioLatency(data.audio_config.audio_latency || 60);
+        setSyncOffset(data.audio_config.sync_offset_ms || 0);
         setAudioSyncEnabled(data.audio_config.wifi_speaker_active || data.call_gateway_enabled);
       } else {
         setWifiSpeakerActive(data.wifi_speaker_active);
@@ -313,12 +316,14 @@ export default function App() {
     playback_mode?: 'destination_only' | 'both';
     wifi_speaker_active?: boolean;
     audio_latency?: number;
+    sync_offset_ms?: number;
   }) => {
     try {
       const currentDir = newConfig.audio_direction !== undefined ? newConfig.audio_direction : audioDirection;
       const currentMode = newConfig.playback_mode !== undefined ? newConfig.playback_mode : desktopToMobilePlaybackMode;
       const currentActive = newConfig.wifi_speaker_active !== undefined ? newConfig.wifi_speaker_active : wifiSpeakerActive;
       const currentLatency = newConfig.audio_latency !== undefined ? newConfig.audio_latency : audioLatency;
+      const currentOffset = newConfig.sync_offset_ms !== undefined ? newConfig.sync_offset_ms : syncOffset;
 
       const res = await fetch('http://localhost:8080/api/v1/audio/config', {
         method: 'POST',
@@ -327,7 +332,8 @@ export default function App() {
           audio_direction: currentDir,
           playback_mode: currentMode,
           wifi_speaker_active: currentActive,
-          audio_latency: currentLatency
+          audio_latency: currentLatency,
+          sync_offset_ms: currentOffset
         })
       });
       if (!res.ok) throw new Error('Failed to update audio configuration');
@@ -336,6 +342,7 @@ export default function App() {
       if (newConfig.playback_mode !== undefined) setDesktopToMobilePlaybackMode(newConfig.playback_mode);
       if (newConfig.wifi_speaker_active !== undefined) setWifiSpeakerActive(newConfig.wifi_speaker_active);
       if (newConfig.audio_latency !== undefined) setAudioLatency(newConfig.audio_latency);
+      if (newConfig.sync_offset_ms !== undefined) setSyncOffset(newConfig.sync_offset_ms);
     } catch (err: any) {
       console.error(err);
       showToast(`Error updating config: ${err.message}`);
@@ -510,6 +517,7 @@ export default function App() {
             setDesktopToMobilePlaybackMode(payload.data.playback_mode);
             setWifiSpeakerActive(payload.data.wifi_speaker_active);
             setAudioLatency(payload.data.audio_latency || 60);
+            setSyncOffset(payload.data.sync_offset_ms || 0);
             if (payload.data.wifi_speaker_active) {
               setAudioSyncEnabled(true);
             }
@@ -1320,6 +1328,34 @@ export default function App() {
                               Play on Both Devices (Laptop & mobile speakers simultaneously)
                             </label>
                           </div>
+
+                          {desktopToMobilePlaybackMode === 'both' && (
+                            <>
+                              <hr style={{ border: 'none', borderTop: '1px solid var(--border-color)', margin: '1rem 0' }} />
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                  <span style={{ fontWeight: '600', fontSize: '0.9rem' }}>Acoustic Fine-Tuning</span>
+                                  <span style={{ fontWeight: '700', fontSize: '0.9rem', color: 'var(--accent)' }}>
+                                    {syncOffset > 0 ? `+${syncOffset}` : syncOffset} ms
+                                  </span>
+                                </div>
+                                <input 
+                                  type="range" 
+                                  min="-30" 
+                                  max="30" 
+                                  step="1" 
+                                  value={syncOffset} 
+                                  onChange={(e) => setSyncOffset(Number(e.target.value))}
+                                  onMouseUp={(e) => updateAudioConfig({ sync_offset_ms: Number((e.target as HTMLInputElement).value) })}
+                                  onTouchEnd={(e) => updateAudioConfig({ sync_offset_ms: Number((e.target as HTMLInputElement).value) })}
+                                  className="m3-slider"
+                                />
+                                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                  Adjust delay to align computer and phone speaker sound waves in your room.
+                                </span>
+                              </div>
+                            </>
+                          )}
 
                           <div style={{ marginTop: '1.5rem', display: 'flex', justifyContent: 'center' }}>
                             {status?.paired_devices.some(d => d.is_online) ? (

@@ -15,10 +15,16 @@ pub struct AudioConfig {
     pub wifi_speaker_active: bool,
     #[serde(default = "default_audio_latency")]
     pub audio_latency: u32,
+    #[serde(default = "default_sync_offset")]
+    pub sync_offset_ms: i32,
 }
 
 fn default_audio_latency() -> u32 {
     60
+}
+
+fn default_sync_offset() -> i32 {
+    0
 }
 
 pub struct WifiSpeakerService {
@@ -29,6 +35,7 @@ pub struct WifiSpeakerService {
     original_default_sink: Arc<Mutex<Option<String>>>,
     pub config: Arc<Mutex<AudioConfig>>,
     routing_mutex: Mutex<()>,
+    pub last_reported_latency: Arc<Mutex<Option<u32>>>,
 }
 
 impl WifiSpeakerService {
@@ -44,8 +51,10 @@ impl WifiSpeakerService {
                 playback_mode: "destination_only".to_string(),
                 wifi_speaker_active: false,
                 audio_latency: 60,
+                sync_offset_ms: 0,
             })),
             routing_mutex: Mutex::new(()),
+            last_reported_latency: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -382,10 +391,17 @@ impl WifiSpeakerService {
             return Ok(());
         }
 
+        // Store the last reported latency
+        *self.last_reported_latency.lock().await = Some(latency_msec);
+
         let mode = self.config.lock().await.playback_mode.clone();
         if mode != "both" {
             return Ok(());
         }
+
+        // Get the sync offset from configuration and apply it
+        let sync_offset = self.config.lock().await.sync_offset_ms;
+        let applied_latency = ((latency_msec as i32) + sync_offset).max(1) as u32;
 
         // Get the original default sink (hardware speakers)
         let base_sink = self.original_default_sink.lock().await.clone()
@@ -402,9 +418,9 @@ impl WifiSpeakerService {
         }
 
         // 2. Load new loopback module with updated latency
-        info!("Dynamic Sync: looping back wifi_speaker.monitor to hardware sink {} with latency {}ms...", base_sink, latency_msec);
+        info!("Dynamic Sync: looping back wifi_speaker.monitor to hardware sink {} with latency {}ms (offset: {}ms, raw: {}ms)...", base_sink, applied_latency, sync_offset, latency_msec);
         match Command::new("pactl")
-            .args(&["load-module", "module-loopback", "source=wifi_speaker.monitor", &format!("sink={}", base_sink), &format!("latency_msec={}", latency_msec)])
+            .args(&["load-module", "module-loopback", "source=wifi_speaker.monitor", &format!("sink={}", base_sink), &format!("latency_msec={}", applied_latency)])
             .output()
             .await
         {
