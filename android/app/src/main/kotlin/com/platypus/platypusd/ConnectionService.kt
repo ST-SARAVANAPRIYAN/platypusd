@@ -713,6 +713,15 @@ class ConnectionService : Service() {
                             scope.launch(Dispatchers.Main) {
                                 handleCallActionCommand(action)
                             }
+                        } else if (event == "FetchContacts") {
+                            Log.i(TAG, "Received request to fetch contacts.")
+                            fetchContactsAndSend()
+                        } else if (event == "DialCall") {
+                            val number = data.optString("number")
+                            Log.i(TAG, "Received request to dial: $number")
+                            if (number.isNotEmpty()) {
+                                dialCall(number)
+                            }
                         } else if (event == "AudioConfigChanged") {
                             val direction = data.optString("audio_direction", "desktop_to_mobile")
                             val mode = data.optString("playback_mode", "destination_only")
@@ -1339,6 +1348,80 @@ class ConnectionService : Service() {
         }
     }
 
+    private fun fetchContactsAndSend() {
+        if (checkSelfPermission(android.Manifest.permission.READ_CONTACTS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            Log.e(TAG, "READ_CONTACTS permission not granted, cannot fetch contacts")
+            return
+        }
+        scope.launch(Dispatchers.IO) {
+            try {
+                val contacts = org.json.JSONArray()
+                val uri = android.provider.ContactsContract.CommonDataKinds.Phone.CONTENT_URI
+                val projection = arrayOf(
+                    android.provider.ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+                    android.provider.ContactsContract.CommonDataKinds.Phone.NUMBER
+                )
+                
+                contentResolver.query(uri, projection, null, null, "${android.provider.ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} ASC")?.use { cursor ->
+                    val nameIdx = cursor.getColumnIndex(android.provider.ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
+                    val numIdx = cursor.getColumnIndex(android.provider.ContactsContract.CommonDataKinds.Phone.NUMBER)
+                    val seenNumbers = HashSet<String>()
+                    
+                    while (cursor.moveToNext()) {
+                        if (nameIdx != -1 && numIdx != -1) {
+                            val name = cursor.getString(nameIdx)
+                            val number = cursor.getString(numIdx)
+                            val cleanNumber = number.replace("\\s".toRegex(), "")
+                            if (cleanNumber.isNotEmpty() && seenNumbers.add(cleanNumber)) {
+                                val c = JSONObject().apply {
+                                    put("name", name)
+                                    put("number", cleanNumber)
+                                }
+                                contacts.put(c)
+                            }
+                        }
+                        if (contacts.length() >= 100) break
+                    }
+                }
+                
+                val response = JSONObject().apply {
+                    put("command", "ContactsListSynced")
+                    put("data", JSONObject().apply {
+                        put("contacts", contacts)
+                    })
+                }
+                activeWebSocket?.send(response.toString())
+                Log.i(TAG, "Sent ${contacts.length()} contacts to daemon via WS.")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error fetching contacts: ${e.message}")
+            }
+        }
+    }
+
+    private fun dialCall(number: String) {
+        scope.launch(Dispatchers.Main) {
+            try {
+                val intent = Intent(Intent.ACTION_CALL).apply {
+                    data = android.net.Uri.parse("tel:$number")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                if (checkSelfPermission(android.Manifest.permission.CALL_PHONE) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    startActivity(intent)
+                    Log.i(TAG, "Successfully initiated call to $number")
+                } else {
+                    Log.w(TAG, "CALL_PHONE permission missing, falling back to ACTION_DIAL")
+                    val dialIntent = Intent(Intent.ACTION_DIAL).apply {
+                        data = android.net.Uri.parse("tel:$number")
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    startActivity(dialIntent)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error dialing call: ${e.message}")
+            }
+        }
+    }
+
     private var isBluetoothConnectedCached: Boolean? = null
 
     private fun checkBluetoothConnectionToHost() {
@@ -1462,6 +1545,26 @@ class ConnectionService : Service() {
     /* ---------------- Telephony Integration ---------------- */
     private fun relayCallState(callId: String, number: String, contactName: String, state: String) {
         scope.launch {
+            // Try sending via WebSocket first
+            if (activeWebSocket != null && isWsConnected) {
+                try {
+                    val wsJson = JSONObject().apply {
+                        put("command", "UpdateCallState")
+                        put("data", JSONObject().apply {
+                            put("call_id", callId)
+                            put("number", number)
+                            put("contact_name", contactName)
+                            put("state", state)
+                        })
+                    }
+                    activeWebSocket?.send(wsJson.toString())
+                    Log.i(TAG, "Successfully sent call state update via WebSocket: $state")
+                    return@launch
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error sending call state via WebSocket, falling back to HTTP: ${e.message}")
+                }
+            }
+
             try {
                 val json = JSONObject().apply {
                     put("call_id", callId)

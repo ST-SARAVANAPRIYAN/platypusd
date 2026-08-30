@@ -146,11 +146,21 @@ async fn handle_socket(
                                     if is_connected {
                                         active_bt.insert(dev_id.to_string());
                                         if let Some(ref m) = mac {
-                                            state_clone.call_service.set_bluetooth_mac(Some(m.clone())).await;
+                                            if !m.is_empty() {
+                                                state_clone.call_service.set_bluetooth_mac(Some(m.clone())).await;
+                                            }
                                         }
                                     } else {
                                         active_bt.remove(dev_id);
-                                        state_clone.call_service.set_bluetooth_mac(None).await;
+                                        if let Some(ref m) = mac {
+                                            if !m.is_empty() {
+                                                state_clone.call_service.set_bluetooth_mac(Some(m.clone())).await;
+                                            } else {
+                                                state_clone.call_service.set_bluetooth_mac(None).await;
+                                            }
+                                        } else {
+                                            state_clone.call_service.set_bluetooth_mac(None).await;
+                                        }
                                     }
                                     // Broadcast Bluetooth state change so the desktop UI updates instantly
                                     let _ = state_clone.tx.send(WsMessage {
@@ -161,6 +171,50 @@ async fn handle_socket(
                                         }),
                                     });
                                 }
+                            }
+                        } else if cmd == "UpdateCallState" {
+                            if let Some(data) = ws_cmd.get("data") {
+                                if let Ok(payload) = serde_json::from_value::<crate::services::call::ActiveCall>(data.clone()) {
+                                    info!("Call state update received via WS: {:?}", payload);
+                                    
+                                    if payload.state != crate::services::call::CallState::Disconnected {
+                                        if state_clone.wifi_speaker_service.is_active() {
+                                            info!("Muting/Stopping Wi-Fi Speaker due to active call state");
+                                            let _ = state_clone.wifi_speaker_service.stop().await;
+                                            let _ = state_clone.tx.send(WsMessage {
+                                                event: "WifiSpeakerStopped".to_string(),
+                                                data: serde_json::json!({ "reason": "phone_call" }),
+                                            });
+                                        }
+                                    }
+                                    
+                                    let _updated = state_clone.call_service.update_call_state(payload.clone()).await;
+                                    
+                                    // Broadcast the update via WS to other clients (like QML desktop)
+                                    let _ = state_clone.tx.send(WsMessage {
+                                        event: "CallStateChanged".to_string(),
+                                        data: serde_json::to_value(&payload).unwrap_or_default(),
+                                    });
+                                }
+                            }
+                        } else if cmd == "FetchContacts" {
+                            let _ = state_clone.tx.send(WsMessage {
+                                event: "FetchContacts".to_string(),
+                                data: serde_json::json!({}),
+                            });
+                        } else if cmd == "ContactsListSynced" {
+                            if let Some(data) = ws_cmd.get("data") {
+                                let _ = state_clone.tx.send(WsMessage {
+                                    event: "ContactsListChanged".to_string(),
+                                    data: data.clone(),
+                                });
+                            }
+                        } else if cmd == "DialCall" {
+                            if let Some(data) = ws_cmd.get("data") {
+                                let _ = state_clone.tx.send(WsMessage {
+                                    event: "DialCall".to_string(),
+                                    data: data.clone(),
+                                });
                             }
                         } else if cmd == "ReportLatency" {
                             if let Some(data) = ws_cmd.get("data") {

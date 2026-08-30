@@ -84,9 +84,9 @@ impl CallService {
             }
             old
         } else {
-            if call.state == CallState::Ringing {
+            if call.state == CallState::Ringing || call.state == CallState::Connected {
                 if let Err(e) = self.setup_audio_routing().await {
-                    warn!("Failed to set up pre-emptive audio routing: {}", e);
+                    warn!("Failed to set up audio routing: {}", e);
                 }
             }
             *active = Some(call.clone());
