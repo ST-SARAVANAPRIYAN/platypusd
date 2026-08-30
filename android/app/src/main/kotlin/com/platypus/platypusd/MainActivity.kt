@@ -282,6 +282,9 @@ class MainActivity : ComponentActivity() {
             permissions.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
         }
         
+        // Add READ_PHONE_STATE permission for active call detection and auto-mute
+        permissions.add(Manifest.permission.READ_PHONE_STATE)
+        
         val missing = permissions.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }

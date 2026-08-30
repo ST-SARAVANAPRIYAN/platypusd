@@ -187,6 +187,71 @@ impl WifiSpeakerService {
             }
         }
 
+        // Start a background task to periodically move sink-inputs to wifi_speaker
+        let is_active_monitor = self.is_active.clone();
+        tokio::spawn(async move {
+            info!("Sink-input monitoring loop started.");
+            while is_active_monitor.load(Ordering::Relaxed) {
+                tokio::time::sleep(tokio::time::Duration::from_millis(800)).await;
+                if !is_active_monitor.load(Ordering::Relaxed) {
+                    break;
+                }
+
+                // Query short sinks to find wifi_speaker's sink ID dynamically
+                let mut wifi_sink_id_str = "".to_string();
+                let mut wifi_sink_name = "wifi_speaker".to_string();
+                if let Ok(out) = Command::new("pactl").args(&["list", "short", "sinks"]).output().await {
+                    if out.status.success() {
+                        let stdout_str = String::from_utf8_lossy(&out.stdout);
+                        for line in stdout_str.lines() {
+                            let mut parts = line.split_whitespace();
+                            if let Some(id_str) = parts.next() {
+                                if let Some(name) = parts.next() {
+                                    if name.contains("wifi_speaker") {
+                                        wifi_sink_id_str = id_str.to_string();
+                                        wifi_sink_name = name.to_string();
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Move new application sink-inputs to wifi_speaker
+                if let Ok(out) = Command::new("pactl").args(&["list", "short", "sink-inputs"]).output().await {
+                    if out.status.success() {
+                        let stdout_str = String::from_utf8_lossy(&out.stdout);
+                        for line in stdout_str.lines() {
+                            let mut parts = line.split_whitespace();
+                            if let Some(input_id_str) = parts.next() {
+                                if let Some(current_sink_str) = parts.next() {
+                                    if let Some(client_str) = parts.next() {
+                                        // Only move if client is not "-" (meaning it's a real application, not a loopback module)
+                                        // And only move if it's not already routed to wifi_speaker
+                                        if client_str != "-" 
+                                            && current_sink_str != wifi_sink_id_str 
+                                            && current_sink_str != "wifi_speaker" 
+                                            && !current_sink_str.contains("wifi_speaker") 
+                                        {
+                                            if let Ok(input_id) = input_id_str.parse::<u32>() {
+                                                info!("Dynamically moving new stream {} (currently on sink {}) to wifi_speaker...", input_id, current_sink_str);
+                                                let _ = Command::new("pactl")
+                                                    .args(&["move-sink-input", &input_id.to_string(), &wifi_sink_name])
+                                                    .output()
+                                                    .await;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            info!("Sink-input monitoring loop stopped.");
+        });
+
         // If playing on both devices, loop back wifi_speaker monitor to the hardware speakers
         if mode == "both" {
             let loopback_latency = latency_msec + 15;
